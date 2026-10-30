@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#16192d">
+  <title>Pumpkin Parade</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Courier New", monospace;
+      background: #101323;
+      color: #fff3cc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background:
+        radial-gradient(ellipse at 50% 20%, #34304c 0, #191c30 48%, #101323 100%);
+    }
+    main { width: min(100%, 960px); text-align: center; }
+    h1 {
+      margin: 0 0 12px;
+      color: #ffd66b;
+      font-size: clamp(20px, 4vw, 32px);
+      letter-spacing: .12em;
+      text-shadow: 3px 3px #8f3c35;
+    }
+    .screen {
+      width: 100%;
+      aspect-ratio: 3 / 2;
+      border: 5px solid #f3c66b;
+      border-radius: 8px;
+      background: #121b2b;
+      box-shadow: 0 0 0 4px #542e45, 0 18px 55px #0009;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      display: block;
+      touch-action: none;
+    }
+    .help {
+      margin: 13px 0 0;
+      color: #d3c7ac;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .help b { color: #ffe28c; }
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      .help { font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PUMPKIN PARADE</h1>
+    <canvas class="screen" id="screen" width="240" height="160" aria-label="Pumpkin Parade tower defense game"></canvas>
+    <p class="help">
+      <b>ARROWS</b> move · <b>A / Z</b> place or upgrade · <b>B / X</b> sell ·
+      <b>SELECT / SPACE</b> choose tower · <b>R / ENTER</b> start night ·
+      <b>START / P</b> pause · click or tap to play
+    </p>
+  </main>
+  <script>
+    (() => {
+      "use strict";
+
+      const canvas = document.getElementById("screen");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.imageSmoothingEnabled = false;
+
+      const W = 240, H = 160, TILE = 16, COLS = 30, ROWS = 18;
+      const HUD = 23, FOOT = 12, VIEW_H = H - HUD - FOOT;
+      const towerDefs = [
+        { name: "SCARECROW", short: "STR", cost: 50, color: "#e9c56e", range: 57, rate: .72, damage: 9, magic: false, evolutions: ["CROW CALLER", "STRAW SENTINEL"] },
+        { name: "JACK LANTERN", short: "JAK", cost: 75, color: "#ff873d", range: 44, rate: 1.05, damage: 20, magic: true, evolutions: ["INFERNO JACK", "WILL-O-WISP"] },
+        { name: "WITCH CAULDRON", short: "CAU", cost: 65, color: "#a6db71", range: 48, rate: 1.28, damage: 5, magic: true, evolutions: ["CANDY GLUE", "HEX POT"] },
+        { name: "MOONFLOWER", short: "MOO", cost: 80, color: "#84d9e8", range: 53, rate: 0, damage: 0, magic: true, evolutions: ["BLOOD MOON", "STAR BLOOM"] },
+        { name: "BAT ROOST", short: "BAT", cost: 90, color: "#bd9bea", range: 67, rate: .48, damage: 6, magic: false, evolutions: ["NIGHT SWARM", "VAMPIRE BATS"] }
+      ];
+      const path = [
+        [-1, 2], [4, 2], [4, 5], [9, 5], [9, 2], [14, 2], [14, 7],
+        [10, 7], [10, 10], [16, 10], [16, 5], [21, 5], [21, 9], [25, 9],
+        [25, 13], [20, 13], [20, 16], [25, 16], [30, 16]
+      ];
+      const pathTiles = new Set();
+      for (let i = 0; i < path.length - 1; i++) {
+        let [x, y] = path[i];
+        const [tx, ty] = path[i + 1];
+        const dx = Math.sign(tx - x), dy = Math.sign(ty - y);
+        pathTiles.add(`${x},${y}`);
+        while (x !== tx || y !== ty) {
+          x += dx; y += dy;
+          pathTiles.add(`${x},${y}`);
+        }
+      }
+
+      const state = {
+        mode: "title", phase: "day", day: 1, candy: 150, seeds: 0, pumpkins: 8,
+        cursor: { x: 2, y: 3 }, camera: { x: 0, y: 0 }, selected: 0,
+        towers: [], enemies: [], shots: [], particles: [], spawnLeft: 0,
+        spawnTimer: 0, elapsed: 0, nightTime: 0, paused: false, message: "",
+        messageUntil: 0, lastTime: 0, waveClearTimer: 0, titleTime: 0,
+        keys: new Set(), audio: null, musicTimer: null, audioOn: true
+      };
+
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const cellKey = (x, y) => `${x},${y}`;
+      const say = (text, duration = 2.2) => {
+        state.message = text;
+        state.messageUntil = state.elapsed + duration;
+      };
+
+      function startAudio() {
+        if (state.audio) {
+          if (state.audio.context.state === "suspended") state.audio.context.resume();
+          return;
+        }
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) {
+          state.audioOn = false;
+          return;
+        }
+        const context = new AudioContext();
+        const master = context.createGain();
+        master.gain.value = 0.16;
+        master.connect(context.destination);
+        state.audio = { context, master };
+        if (context.state === "suspended") context.resume();
+        playMusic();
+      }
+
+      function tone(freq, duration, type = "square", volume = .1, when = 0, slide = 1) {
+        if (!state.audioOn || !state.audio) return;
+        const { context, master } = state.audio;
+        const at = context.currentTime + when;
+        const osc = context.createOscillator();
+        const gain = context.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, at);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), at + duration);
+        gain.gain.setValueAtTime(volume, at);
+        gain.gain.exponentialRampToValueAtTime(.001, at + duration);
+        osc.connect(gain); gain.connect(master);
+        osc.start(at); osc.stop(at + duration);
+      }
+
+      function playMusic() {
+        if (!state.audioOn || !state.audio) return;
+        const notes = [392, 523, 587, 659, 587, 523, 440, 392, 330, 392, 523, 440, 392, 330, 294, 330];
+        let index = 0;
+        if (state.musicTimer) clearInterval(state.musicTimer);
+        state.musicTimer = setInterval(() => {
+          if (!state.audio || !state.audioOn) return;
+          const title = state.mode === "title";
+          const n = notes[index++ % notes.length] * (title ? 1 : .75);
+          tone(n, .22, "triangle", title ? .045 : .022, 0, 1.01);
+          if (index % 4 === 0) tone(n / 2, .34, "sine", .025, 0, .99);
+        }, 260);
+      }
+
+      function sfx(kind) {
+        if (!state.audio) return;
+        const sounds = {
+          place: [[460, .07, "square", .055, 1.4], [690, .09, "triangle", .045, 1.2]],
+          upgrade: [[380, .12, "triangle", .07, 1.5], [570, .14, "square", .04, 1.4]],
+          sell: [[520, .1, "triangle", .055, .65]],
+          hit: [[160, .08, "square", .04, .75]],
+          kill: [[300, .09, "square", .04, 1.4], [460, .12, "triangle", .04, 1.3]],
+          night: [[220, .26, "sawtooth", .05, .6], [165, .32, "triangle", .045, .72]],
+          dawn: [[392, .15, "triangle", .05, 1.25], [523, .18, "triangle", .05, 1.2], [659, .24, "triangle", .045, 1.2]],
+          hurt: [[130, .22, "sawtooth", .055, .62]],
+          win: [[392, .12, "triangle", .05, 1.2], [523, .14, "triangle", .05, 1.2], [659, .18, "triangle", .06, 1.25], [784, .34, "triangle", .05, 1.15]]
+        };
+        (sounds[kind] || []).forEach(([f, d, t, v, s], i) => tone(f, d, t, v, i * .08, s));
+      }
+
+      function startGame() {
+        startAudio();
+        state.mode = "game";
+        state.phase = "day";
+        state.day = 1;
+        state.candy = 150;
+        state.seeds = 0;
+        state.pumpkins = 8;
+        state.towers = [];
+        state.enemies = [];
+        state.shots = [];
+        state.particles = [];
+        state.camera = { x: 0, y: 0 };
+        state.cursor = { x: 2, y: 3 };
+        state.selected = 0;
+        state.paused = false;
+        say("BUILD YOUR PATCH. THE PARADE COMES AT DUSK!", 4);
+        playMusic();
+      }
+
+      function towerAt(x, y) {
+        return state.towers.find(t => t.x === x && t.y === y);
+      }
+
+      function canBuild(x, y) {
+        return x >= 0 && y >= 0 && x < COLS && y < ROWS &&
+          !pathTiles.has(cellKey(x, y)) && !towerAt(x, y);
+      }
+
+      function placeOrUpgrade() {
+        if (state.phase !== "day" || state.mode !== "game") return;
+        const { x, y } = state.cursor;
+        const tower = towerAt(x, y);
+        if (tower) {
+          if (tower.level >= 3) { say("FULLY EVOLVED!"); return; }
+          const candyCost = 35 + tower.level * 25;
+          const seedCost = tower.level === 2 ? 2 : 0;
+          if (state.candy < candyCost || state.seeds < seedCost) {
+            say(`UPGRADE NEEDS ${candyCost} CORN${seedCost ? ` + ${seedCost} SEEDS` : ""}`);
+            return;
+          }
+          state.candy -= candyCost;
+          state.seeds -= seedCost;
+          tower.level++;
+          if (tower.level === 3) {
+            tower.evolved = true;
+            tower.branch = state.selected % 2;
+          }
+          sfx("upgrade");
+          say(tower.level === 3 ? `EVOLVED: ${towerDefs[tower.type].evolutions[tower.branch]}!` : "TOWER UPGRADED!");
+          return;
+        }
+        if (!canBuild(x, y)) { say("BUILD ON CLEAR GRASS BESIDE THE PATH"); return; }
+        const def = towerDefs[state.selected];
+        if (state.candy < def.cost) { say("NOT ENOUGH CANDY CORN!"); return; }
+        state.candy -= def.cost;
+        state.towers.push({ x, y, type: state.selected, level: 1, cooldown: .2, branch: 0, angle: 0 });
+        sfx("place");
+        say(`${def.name} PLANTED!`);
+      }
+
+      function sellTower() {
+        if (state.phase !== "day" || state.mode !== "game") return;
+        const index = state.towers.findIndex(t => t.x === state.cursor.x && t.y === state.cursor.y);
+        if (index < 0) { say("NO TOWER HERE"); return; }
+        const tower = state.towers[index];
+        const original = towerDefs[tower.type].cost;
+        const refund = Math.floor(original * (.55 + (tower.level - 1) * .25));
+        state.candy += refund;
+        state.towers.splice(index, 1);
+        sfx("sell");
+        say(`TOWER RECYCLED: +${refund} CORN`);
+      }
+
+      function startNight() {
+        if (state.mode !== "game" || state.phase !== "day") return;
+        state.phase = "night";
+        state.nightTime = 0;
+        state.spawnLeft = 7 + state.day * 3;
+        if (state.day === 5) state.spawnLeft += 1;
+        state.spawnTimer = .7;
+        state.enemies = [];
+        state.shots = [];
+        state.paused = false;
+        sfx("night");
+        say(`NIGHT ${state.day}: THE PARADE IS COMING!`, 3);
+        playMusic();
+      }
+
+      function enemyTemplate(day, index) {
+        if (day === 5 && index === 0) return { kind: "horseman", hp: 470, speed: 17, reward: 45, size: 12, color: "#a869d6", magicOnly: false };
+        const roll = Math.random();
+        if (day >= 2 && roll < .2) return { kind: "ghost", hp: 35 + day * 9, speed: 28 + day, reward: 9, size: 9, color: "#9ce9e9", magicOnly: true };
+        if (day >= 2 && roll < .43) return { kind: "skeleton", hp: 30 + day * 8, speed: 38 + day * 2, reward: 8, size: 9, color: "#e8dfb7", magicOnly: false };
+        if (day >= 3 && roll < .64) return { kind: "werewolf", hp: 95 + day * 18, speed: 20 + day * 1.3, reward: 18, size: 11, color: "#b68b65", magicOnly: false };
+        if (roll < .78) return { kind: "trickster", hp: 21 + day * 6, speed: 42, reward: 5, size: 8, color: "#ef9bb7", magicOnly: false };
+        return { kind: "zombie", hp: 62 + day * 16, speed: 17 + day, reward: 11, size: 10, color: "#82bf72", magicOnly: false };
+      }
+
+      function spawnEnemy() {
+        const template = enemyTemplate(state.day, state.spawnLeft);
+        const first = path[0];
+        state.enemies.push({
+          ...template, maxHp: template.hp, x: first[0] * TILE + TILE / 2,
+          y: first[1] * TILE + TILE / 2, target: 1, slow: 0, poison: 0,
+          bob: Math.random() * Math.PI * 2, flash: 0
+        });
+        state.spawnLeft--;
+      }
+
+      function beginDay() {
+        if (state.pumpkins <= 0) {
+          state.mode = "over";
+          say("THE PATCH IS LOST...", 99);
+          return;
+        }
+        if (state.day >= 5) {
+          state.mode = "win";
+          sfx("win");
+          say("THE PATCH IS SAFE. HAPPY HARVEST!", 99);
+          return;
+        }
+        state.day++;
+        state.phase = "day";
+        state.seeds += Math.max(1, Math.ceil(state.pumpkins / 3));
+        state.candy += 25 + state.pumpkins * 5;
+        state.enemies = [];
+        state.shots = [];
+        state.particles = [];
+        sfx("dawn");
+        say(`DAWN! +${25 + state.pumpkins * 5} CORN · +${Math.max(1, Math.ceil(state.pumpkins / 3))} MOON SEEDS`, 4);
+        playMusic();
+      }
+
+      function update(dt) {
+        state.elapsed += dt;
+        state.titleTime += dt;
+        if (state.mode !== "game") return;
+        updateCamera();
+        if (state.paused || state.phase !== "night") return;
+        state.nightTime += dt;
+        if (state.spawnLeft > 0) {
+          state.spawnTimer -= dt;
+          if (state.spawnTimer <= 0) {
+            spawnEnemy();
+            state.spawnTimer = Math.max(.45, 1.05 - state.day * .07);
+          }
+        }
+        updateEnemies(dt);
+        updateTowers(dt);
+        updateShots(dt);
+        updateParticles(dt);
+        if (state.pumpkins <= 0) {
+          state.mode = "over";
+          say("THE PATCH IS LOST...", 99);
+          sfx("hurt");
+        } else if (state.spawnLeft <= 0 && state.enemies.length === 0) {
+          state.waveClearTimer += dt;
+          if (state.waveClearTimer > 1.3) {
+            state.waveClearTimer = 0;
+            beginDay();
+          }
+        } else state.waveClearTimer = 0;
+      }
+
+      function updateCamera() {
+        const margin = 2;
+        if (state.cursor.x < state.camera.x + margin) state.camera.x = state.cursor.x - margin;
+        if (state.cursor.x > state.camera.x + 12 - margin) state.camera.x = state.cursor.x - (12 - margin);
+        if (state.cursor.y < state.camera.y + margin) state.camera.y = state.cursor.y - margin;
+        if (state.cursor.y > state.camera.y + 7 - margin) state.camera.y = state.cursor.y - (7 - margin);
+        state.camera.x = clamp(state.camera.x, 0, COLS - 15);
+        state.camera.y = clamp(state.camera.y, 0, ROWS - Math.ceil(VIEW_H / TILE));
+      }
+
+      function updateEnemies(dt) {
+        for (let i = state.enemies.length - 1; i >= 0; i--) {
+          const enemy = state.enemies[i];
+          enemy.bob += dt * 8;
+          enemy.flash = Math.max(0, enemy.flash - dt);
+          enemy.slow = Math.max(0, enemy.slow - dt);
+          if (enemy.poison > 0) {
+            enemy.poison -= dt;
+            enemy.hp -= dt * (enemy.kind === "ghost" ? 6 : 8);
+            if (Math.random() < dt * 4) particle(enemy.x, enemy.y, "#a4e86e", 1);
+          }
+          const waypoint = path[enemy.target];
+          if (!waypoint) {
+            state.pumpkins--;
+            state.enemies.splice(i, 1);
+            sfx("hurt");
+            say(`A MONSTER ATE A PUMPKIN! ${state.pumpkins} LEFT`, 2);
+            continue;
+          }
+          const tx = waypoint[0] * TILE + TILE / 2, ty = waypoint[1] * TILE + TILE / 2;
+          const dx = tx - enemy.x, dy = ty - enemy.y, length = Math.hypot(dx, dy);
+          const speed = enemy.speed * (enemy.slow > 0 ? .52 : 1);
+          if (length < speed * dt + 1) {
+            enemy.x = tx; enemy.y = ty; enemy.target++;
+          } else {
+            enemy.x += dx / length * speed * dt;
+            enemy.y += dy / length * speed * dt;
+          }
+          if (enemy.hp <= 0) defeatEnemy(i, enemy);
+        }
+      }
+
+      function updateTowers(dt) {
+        for (const tower of state.towers) {
+          const def = towerDefs[tower.type];
+          tower.cooldown -= dt;
+          const level = tower.level;
+          if (tower.type === 3) continue;
+          const range = def.range + (level - 1) * 7;
+          let target = null, best = -1;
+          for (const enemy of state.enemies) {
+            if (enemy.magicOnly && !def.magic) continue;
+            const d = Math.hypot(enemy.x - (tower.x * TILE + 8), enemy.y - (tower.y * TILE + 8));
+            const progress = enemy.target * 100 - d;
+            if (d <= range && progress > best) { best = progress; target = enemy; }
+          }
+          if (target && tower.cooldown <= 0) {
+            const damage = def.damage * (1 + (level - 1) * .42);
+            const splash = tower.type === 0 && level >= 3 && tower.branch === 0;
+            const slow = tower.type === 2;
+            if (tower.type === 4 && level >= 3 && tower.branch === 1) {
+              target.hp -= damage * 2.1;
+              particle(target.x, target.y, "#dcb8ff", 3);
+            } else {
+              state.shots.push({
+                x: tower.x * TILE + 8, y: tower.y * TILE + 7,
+                target, speed: tower.type === 4 ? 170 : 125, damage,
+                color: def.color, splash, slow, poison: tower.type === 2 && level >= 2
+              });
+            }
+            if (tower.type === 1 && level >= 2) target.poison = Math.max(target.poison, 1.2);
+            tower.cooldown = def.rate * (level >= 3 && tower.type === 4 ? .68 : 1);
+            tower.angle = Math.atan2(target.y - tower.y * TILE - 8, target.x - tower.x * TILE - 8);
+          }
+        }
+        for (const aura of state.towers.filter(t => t.type === 3)) {
+          const radius = towerDefs[3].range + (aura.level - 1) * 8;
+          for (const tower of state.towers) {
+            if (tower === aura || tower.type === 3) continue;
+            const d = Math.hypot(tower.x - aura.x, tower.y - aura.y) * TILE;
+            if (d < radius) {
+              tower.cooldown -= dt * (aura.level >= 3 ? .85 : .42);
+              if (aura.level >= 3 && aura.branch === 0) {
+                for (const enemy of state.enemies) {
+                  if (Math.hypot(enemy.x - aura.x * TILE - 8, enemy.y - aura.y * TILE - 8) < radius && enemy.kind !== "horseman" && Math.random() < dt * .12) {
+                    enemy.slow = Math.max(enemy.slow, .6);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      function updateShots(dt) {
+        for (let i = state.shots.length - 1; i >= 0; i--) {
+          const shot = state.shots[i];
+          if (!state.enemies.includes(shot.target)) { state.shots.splice(i, 1); continue; }
+          const dx = shot.target.x - shot.x, dy = shot.target.y - shot.y, d = Math.hypot(dx, dy);
+          if (d < shot.speed * dt + 4) {
+            const target = shot.target;
+            target.hp -= shot.damage;
+            target.flash = .1;
+            if (shot.slow) target.slow = Math.max(target.slow, 1.1);
+            if (shot.poison) target.poison = Math.max(target.poison, 2);
+            particle(target.x, target.y, shot.color, 2);
+            sfx(target.hp <= 0 ? "kill" : "hit");
+            if (target.hp <= 0) {
+              const idx = state.enemies.indexOf(target);
+              if (idx >= 0) defeatEnemy(idx, target);
+            }
+            if (shot.splash) {
+              for (const enemy of state.enemies) {
+                if (enemy !== target && Math.hypot(enemy.x - target.x, enemy.y - target.y) < 23) {
+                  enemy.hp -= shot.damage * .55;
+                  if (enemy.hp <= 0) defeatEnemy(state.enemies.indexOf(enemy), enemy);
+                }
+              }
+            }
+            state.shots.splice(i, 1);
+          } else {
+            shot.x += dx / d * shot.speed * dt;
+            shot.y += dy / d * shot.speed * dt;
+          }
+        }
+      }
+
+      function defeatEnemy(index, enemy) {
+        if (index < 0) return;
+        state.candy += enemy.reward;
+        particle(enemy.x, enemy.y, "#ffd567", 6);
+        state.enemies.splice(index, 1);
+        sfx("kill");
+        say(`+${enemy.reward} CANDY CORN`, .8);
+      }
+
+      function particle(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+          state.particles.push({
+            x, y, vx: (Math.random() - .5) * 35, vy: (Math.random() - .7) * 35,
+            life: .35 + Math.random() * .3, color
+          });
+        }
+      }
+
+      function updateParticles(dt) {
+        for (let i = state.particles.length - 1; i >= 0; i--) {
+          const p = state.particles[i];
+          p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+          if (p.life <= 0) state.particles.splice(i, 1);
+        }
+      }
+
+      function draw() {
+        if (state.mode === "title") drawTitle();
+        else {
+          drawHud();
+          drawWorld();
+          drawFooter();
+          if (state.paused) drawPause();
+          if (state.mode === "win" || state.mode === "over") drawEnd();
+        }
+      }
+
+      function drawTitle() {
+        ctx.fillStyle = "#182037"; ctx.fillRect(0, 0, W, H);
+        for (let i = 0; i < 38; i++) {
+          const x = (i * 73 + 19) % W, y = (i * 37 + 8) % 93;
+          ctx.fillStyle = i % 4 === 0 ? "#fff0a5" : "#b9d1e4";
+          ctx.fillRect(x, y, 1, 1);
+          if (i % 7 === 0) ctx.fillRect(x + 1, y, 1, 1);
+        }
+        ctx.fillStyle = "#e9d8b7"; ctx.beginPath(); ctx.arc(202, 31, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#182037"; ctx.fillRect(196, 24, 4, 2); ctx.fillRect(201, 22, 4, 2); ctx.fillRect(204, 27, 4, 2);
+        text("PUMPKIN", 120, 35, "#ffe078", 17, "center");
+        text("PARADE", 120, 53, "#ff9852", 16, "center");
+        text("GUARDIAN OF THE PATCH", 120, 68, "#bde6a4", 7, "center");
+        drawPumpkin(120, 98, 1.5, 0);
+        drawMiniScarecrow(66, 104);
+        drawMiniGhost(171, 102, state.titleTime);
+        drawMiniBat(185, 87, state.titleTime);
+        text("5 NIGHTS · 5 TOWERS · 1 VERY HUNGRY PARADE", 120, 128, "#f7e9c0", 6, "center");
+        text("PRESS A / ENTER / TAP TO BEGIN", 120, 145 + Math.sin(state.titleTime * 4) * 1.5, "#ffd66b", 7, "center");
+        text("♪ ORIGINAL CHIPTUNE ON", 120, 156, "#9db4ca", 5, "center");
+      }
+
+      function drawHud() {
+        ctx.fillStyle = state.phase === "day" ? "#49304a" : "#161c37";
+        ctx.fillRect(0, 0, W, HUD);
+        ctx.fillStyle = state.phase === "day" ? "#f5b04a" : "#a8c8ed";
+        ctx.fillRect(0, HUD - 1, W, 1);
+        text(`${state.phase === "day" ? "☀" : "☾"} DAY ${state.day}/5 ${state.phase === "day" ? "BUILD" : "NIGHT"}`, 4, 8, state.phase === "day" ? "#ffe083" : "#c6ddff", 7);
+        drawCandy(96, 7); text(`${state.candy}`, 105, 8, "#ffe28a", 7);
+        drawSeed(140, 7); text(`${state.seeds}`, 149, 8, "#b7ed9f", 7);
+        text("PATCH", 180, 8, "#f3dbb7", 6);
+        for (let i = 0; i < 8; i++) drawPumpkin(211 + (i % 4) * 6, 6 + Math.floor(i / 4) * 8, .38, i < state.pumpkins ? 0 : 1);
+        if (state.phase === "day") {
+          const def = towerDefs[state.selected];
+          text(`A:${def.short} ${def.cost}  SEL: NEXT  R: NIGHT`, 4, 18, "#f4d8b1", 6);
+        } else {
+          const living = state.enemies.length + state.spawnLeft;
+          text(`WAVE ${state.day}   PARADE: ${living}   ${state.paused ? "PAUSED" : "START: PAUSE"}`, 4, 18, "#c8d8f1", 6);
+        }
+      }
+
+      function drawFooter() {
+        const y0 = HUD;
+        ctx.fillStyle = state.phase === "day" ? "#46613c" : "#202a44";
+        ctx.fillRect(0, y0, W, H - HUD - FOOT);
+        for (let sy = 0; sy < Math.ceil(VIEW_H / TILE); sy++) {
+          for (let sx = 0; sx < 15; sx++) {
+            const mx = sx + state.camera.x, my = sy + state.camera.y;
+            if (mx >= COLS || my >= ROWS) continue;
+            drawTile(mx, my, sx * TILE, y0 + sy * TILE);
+          }
+        }
+        drawPath();
+        drawTowers();
+        drawEnemies();
+        drawShots();
+        drawParticles();
+        drawCursor();
+        ctx.fillStyle = state.phase === "day" ? "#2e263a" : "#14192b";
+        ctx.fillRect(0, H - FOOT, W, FOOT);
+        ctx.fillStyle = "#f4dfa9"; ctx.fillRect(0, H - FOOT, W, 1);
+        if (state.elapsed < state.messageUntil) text(state.message, 4, H - 3, "#fff0bd", 6);
+        else if (state.phase === "day") text(`${towerDefs[state.selected].name} · A PLANT/UPGRADE · B SELL · R NIGHT`, 4, H - 3, "#d7d0bc", 5);
+        else text("ARROWS TO PAN · SURVIVE UNTIL DAWN", 4, H - 3, "#c0cee3", 5);
+      }
+
+      function drawTile(mx, my, x, y) {
+        const n = ((mx * 17 + my * 31) % 7);
+        if (state.phase === "day") {
+          ctx.fillStyle = (mx + my) % 2 ? "#526d42" : "#4e6840";
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = n === 0 ? "#789454" : "#607d49";
+          ctx.fillRect(x + ((mx * 7) % 13), y + ((my * 5) % 13), 2, 1);
+          if (n === 2) { ctx.fillStyle = "#98ad63"; ctx.fillRect(x + 4, y + 10, 1, 2); }
+        } else {
+          ctx.fillStyle = (mx + my) % 2 ? "#25344a" : "#29374b";
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = "#34445a"; ctx.fillRect(x + ((mx * 7) % 13), y + ((my * 5) % 13), 2, 1);
+          if (n === 0) { ctx.fillStyle = "#66829a"; ctx.fillRect(x + 5, y + 4, 1, 1); }
+        }
+      }
+
+      function drawPath() {
+        for (let i = 0; i < path.length - 1; i++) {
+          const [x1, y1] = path[i], [x2, y2] = path[i + 1];
+          const dx = Math.sign(x2 - x1), dy = Math.sign(y2 - y1);
+          let x = x1, y = y1;
+          while (x !== x2 || y !== y2) {
+            drawPathCell(x, y);
+            x += dx; y += dy;
+          }
+          drawPathCell(x2, y2);
+        }
+      }
+
+      function drawPathCell(mx, my) {
+        const sx = mx - state.camera.x, sy = my - state.camera.y;
+        if (sx < 0 || sx >= 15 || sy < 0 || sy * TILE >= VIEW_H) return;
+        const x = sx * TILE, y = HUD + sy * TILE;
+        ctx.fillStyle = state.phase === "day" ? "#a68558" : "#625b66";
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = state.phase === "day" ? "#c4a878" : "#867681";
+        ctx.fillRect(x, y, TILE, 2); ctx.fillRect(x, y + TILE - 2, TILE, 2);
+        ctx.fillStyle = state.phase === "day" ? "#8f754f" : "#4f4d60";
+        ctx.fillRect(x + 3, y + 7, 3, 1); ctx.fillRect(x + 11, y + 11, 2, 1);
+      }
+
+      function drawTowers() {
+        for (const t of state.towers) {
+          const x = (t.x - state.camera.x) * TILE, y = HUD + (t.y - state.camera.y) * TILE;
+          if (x < -TILE || x >= W || y < HUD - TILE || y >= H - FOOT) continue;
+          if (t.type === 3 && t.level >= 2) {
+            ctx.globalAlpha = .12;
+            ctx.fillStyle = "#a9eaff";
+            ctx.beginPath(); ctx.arc(x + 8, y + 8, 24 + t.level * 4, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+          drawTowerSprite(t, x, y);
+          if (t.level > 1) {
+            ctx.fillStyle = "#fff1a7";
+            for (let i = 0; i < t.level - 1; i++) ctx.fillRect(x + 5 + i * 5, y + 1, 3, 2);
+          }
+        }
+      }
+
+      function drawTowerSprite(t, x, y) {
+        const type = t.type;
+        if (type === 0) {
+          ctx.fillStyle = "#4a382c"; ctx.fillRect(x + 7, y + 6, 3, 10);
+          ctx.fillStyle = "#cfab65"; ctx.fillRect(x + 4, y + 3, 9, 8);
+          ctx.fillStyle = "#e7d190"; ctx.fillRect(x + 5, y + 2, 7, 6);
+          ctx.fillStyle = "#443c31"; ctx.fillRect(x + 6, y + 4, 1, 1); ctx.fillRect(x + 10, y + 4, 1, 1);
+          ctx.fillStyle = "#704c3b"; ctx.fillRect(x + 4, y + 11, 9, 2);
+          ctx.fillStyle = "#b8d5ef"; ctx.fillRect(x + 11, y + 5, 3, 2);
+        } else if (type === 1) {
+          drawPumpkin(x + 8, y + 9, .82, 0);
+          ctx.fillStyle = "#ffda77"; ctx.fillRect(x + 6, y + 6, 2, 2); ctx.fillRect(x + 9, y + 6, 2, 2); ctx.fillRect(x + 7, y + 9, 3, 1);
+          ctx.fillStyle = "#704330"; ctx.fillRect(x + 7, y + 13, 3, 3);
+        } else if (type === 2) {
+          ctx.fillStyle = "#56415d"; ctx.fillRect(x + 4, y + 6, 9, 9);
+          ctx.fillStyle = "#ad6cbe"; ctx.fillRect(x + 3, y + 5, 11, 3);
+          ctx.fillStyle = "#91edbf"; ctx.fillRect(x + 6, y + 8, 5, 4);
+          ctx.fillStyle = "#eaffbd"; ctx.fillRect(x + 7, y + 8, 2, 1);
+          ctx.fillStyle = "#aad59b"; ctx.fillRect(x + 7, y + 3, 2, 2);
+        } else if (type === 3) {
+          ctx.fillStyle = "#587c62"; ctx.fillRect(x + 7, y + 8, 2, 8);
+          ctx.fillStyle = "#6ebd75"; ctx.fillRect(x + 4, y + 10, 3, 5); ctx.fillRect(x + 9, y + 10, 4, 5);
+          ctx.fillStyle = "#9ce8e7"; ctx.fillRect(x + 6, y + 3, 5, 6);
+          ctx.fillStyle = "#fff3c6"; ctx.fillRect(x + 7, y + 4, 3, 3);
+          ctx.fillStyle = "#ffd98c"; ctx.fillRect(x + 5, y + 2, 2, 2); ctx.fillRect(x + 10, y + 1, 2, 2);
+        } else {
+          ctx.fillStyle = "#493952"; ctx.fillRect(x + 4, y + 9, 9, 6); ctx.fillRect(x + 6, y + 5, 5, 5);
+          ctx.fillStyle = "#b99add"; ctx.fillRect(x + 6, y + 2, 5, 5);
+          ctx.fillStyle = "#312b43"; ctx.fillRect(x + 5, y + 2, 7, 2);
+          ctx.fillStyle = "#eee2ff"; ctx.fillRect(x + 7, y + 4, 1, 1); ctx.fillRect(x + 10, y + 4, 1, 1);
+          ctx.fillStyle = "#342c40"; ctx.fillRect(x + 3, y + 11, 2, 3); ctx.fillRect(x + 12, y + 11, 2, 3);
+        }
+        if (t.level >= 3) {
+          ctx.fillStyle = t.type === 1 ? "#ff8e4a" : "#f7d77f";
+          ctx.fillRect(x + 2, y + 2, 2, 2); ctx.fillRect(x + 12, y + 2, 2, 2);
+        }
+      }
+
+      function drawEnemies() {
+        for (const e of state.enemies) {
+          const x = e.x - state.camera.x * TILE, y = HUD + e.y - state.camera.y * TILE;
+          if (y < HUD - 14 || y > H - FOOT + 8 || x < -12 || x > W + 12) continue;
+          const bob = Math.sin(e.bob) * 1.2;
+          if (e.kind === "ghost") drawMiniGhost(x, y + bob, state.elapsed);
+          else if (e.kind === "horseman") drawHorseman(x, y + bob);
+          else if (e.kind === "skeleton") drawSkeleton(x, y + bob);
+          else if (e.kind === "trickster") drawTrickster(x, y + bob);
+          else if (e.kind === "werewolf") drawWerewolf(x, y + bob);
+          else drawZombie(x, y + bob);
+          if (e.flash > 0) {
+            ctx.globalAlpha = .45; ctx.fillStyle = "#fff"; ctx.fillRect(x - 6, y - 9, 12, 12); ctx.globalAlpha = 1;
+          }
+          if (e.maxHp > 45) {
+            ctx.fillStyle = "#291b2e"; ctx.fillRect(x - 7, y - 11, 14, 2);
+            ctx.fillStyle = e.kind === "horseman" ? "#e16b71" : "#9de279";
+            ctx.fillRect(x - 7, y - 11, Math.max(1, 14 * e.hp / e.maxHp), 2);
+          }
+        }
+      }
+
+      function drawShots() {
+        for (const shot of state.shots) {
+          const x = shot.x - state.camera.x * TILE, y = HUD + shot.y - state.camera.y * TILE;
+          ctx.fillStyle = shot.color; ctx.fillRect(x - 2, y - 2, 4, 4);
+          ctx.fillStyle = "#fff1ae"; ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
+
+      function drawParticles() {
+        for (const p of state.particles) {
+          ctx.globalAlpha = clamp(p.life * 2, 0, 1);
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x - state.camera.x * TILE, HUD + p.y - state.camera.y * TILE, 2, 2);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawCursor() {
+        const x = (state.cursor.x - state.camera.x) * TILE;
+        const y = HUD + (state.cursor.y - state.camera.y) * TILE;
+        if (x < -TILE || x >= W || y < HUD - TILE || y >= H - FOOT) return;
+        const color = state.phase === "day" ? "#ffe479" : "#d5e7ff";
+        ctx.strokeStyle = color; ctx.lineWidth = 1;
+        ctx.strokeRect(x + 1.5, y + 1.5, TILE - 3, TILE - 3);
+        ctx.fillStyle = color;
+        ctx.fillRect(x + 1, y + 1, 3, 1); ctx.fillRect(x + 1, y + 1, 1, 3);
+      }
+
+      function drawPause() {
+        ctx.fillStyle = "#111526bb"; ctx.fillRect(45, 62, 150, 34);
+        ctx.strokeStyle = "#e7ca83"; ctx.strokeRect(45.5, 62.5, 149, 33);
+        text("PARADE PAUSED", 120, 76, "#ffe48a", 10, "center");
+        text("PRESS START / P TO RESUME", 120, 88, "#e5ddc8", 6, "center");
+      }
+
+      function drawEnd() {
+        ctx.fillStyle = "#121628eF"; ctx.fillRect(23, 49, 194, 62);
+        ctx.strokeStyle = state.mode === "win" ? "#ffdf7b" : "#cf7581";
+        ctx.strokeRect(23.5, 49.5, 193, 61);
+        text(state.mode === "win" ? "PATCH PROTECTED!" : "THE PARADE GOT THROUGH", 120, 66, state.mode === "win" ? "#ffe27e" : "#ffa0a1", 9, "center");
+        text(state.mode === "win" ? "THE HARVEST IS YOURS!" : `${state.pumpkins} PUMPKINS REMAIN`, 120, 80, "#f2e8ce", 7, "center");
+        text("PRESS A / ENTER TO PLAY AGAIN", 120, 98, "#b9d7e9", 6, "center");
+      }
+
+      function drawPumpkin(x, y, scale = 1, gone = 0) {
+        ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.scale(scale, scale);
+        if (gone) {
+          ctx.fillStyle = "#69433e"; ctx.fillRect(-5, -2, 10, 5);
+          ctx.fillStyle = "#392f37"; ctx.fillRect(-3, 2, 6, 2);
+        } else {
+          ctx.fillStyle = "#f58a32"; ctx.fillRect(-5, -4, 10, 8); ctx.fillRect(-7, -2, 14, 4);
+          ctx.fillStyle = "#ffb84c"; ctx.fillRect(-3, -4, 2, 8); ctx.fillRect(2, -3, 2, 6);
+          ctx.fillStyle = "#608745"; ctx.fillRect(-1, -7, 2, 3); ctx.fillRect(1, -7, 3, 1);
+          ctx.fillStyle = "#4d302c"; ctx.fillRect(-3, -1, 2, 2); ctx.fillRect(2, -1, 2, 2); ctx.fillRect(-1, 2, 3, 1);
+        }
+        ctx.restore();
+      }
+
+      function drawCandy(x, y) {
+        ctx.fillStyle = "#ffe68d"; ctx.fillRect(x + 2, y, 4, 6);
+        ctx.fillStyle = "#f38d4a"; ctx.fillRect(x + 2, y + 2, 4, 2);
+        ctx.fillStyle = "#fff4d0"; ctx.fillRect(x + 3, y + 1, 2, 1);
+      }
+
+      function drawSeed(x, y) {
+        ctx.fillStyle = "#9ee488"; ctx.fillRect(x + 2, y + 1, 4, 5);
+        ctx.fillStyle = "#e1ffb7"; ctx.fillRect(x + 3, y + 2, 2, 2);
+      }
+
+      function drawMiniGhost(x, y, time) {
+        const bob = Math.sin(time * 4 + x) * 1.5;
+        ctx.fillStyle = "#bfe9e8"; ctx.fillRect(x - 5, y - 6 + bob, 10, 9);
+        ctx.fillRect(x - 4, y - 8 + bob, 8, 2); ctx.fillRect(x - 6, y - 4 + bob, 12, 4);
+        ctx.fillStyle = "#6b7b9b"; ctx.fillRect(x - 3, y - 3 + bob, 2, 2); ctx.fillRect(x + 2, y - 3 + bob, 2, 2);
+        ctx.fillStyle = "#f6f1dc"; ctx.fillRect(x - 2, y + 2 + bob, 3, 1);
+      }
+
+      function drawMiniBat(x, y, time) {
+        const wing = Math.sin(time * 14 + x) > 0 ? 1 : 0;
+        ctx.fillStyle = "#28243c"; ctx.fillRect(x - 2, y - 2, 5, 4);
+        ctx.fillRect(x - 6, y - (wing ? 4 : 1), 4, 3); ctx.fillRect(x + 3, y - (wing ? 4 : 1), 4, 3);
+        ctx.fillStyle = "#f7b3a5"; ctx.fillRect(x - 1, y - 1, 1, 1); ctx.fillRect(x + 2, y - 1, 1, 1);
+      }
+
+      function drawMiniScarecrow(x, y) {
+        ctx.fillStyle = "#513a2d"; ctx.fillRect(x - 1, y - 3, 3, 15);
+        ctx.fillStyle = "#dfc276"; ctx.fillRect(x - 5, y - 6, 10, 7);
+        ctx.fillStyle = "#8b6044"; ctx.fillRect(x - 7, y - 7, 14, 2);
+        ctx.fillStyle = "#29313a"; ctx.fillRect(x - 3, y - 4, 1, 1); ctx.fillRect(x + 2, y - 4, 1, 1);
+        ctx.fillStyle = "#b5d5f3"; ctx.fillRect(x - 8, y - 1, 16, 2);
+      }
+
+      function drawZombie(x, y) {
+        ctx.fillStyle = "#364639"; ctx.fillRect(x - 5, y - 1, 10, 7);
+        ctx.fillStyle = "#83b978"; ctx.fillRect(x - 4, y - 7, 8, 7);
+        ctx.fillStyle = "#b5d283"; ctx.fillRect(x - 3, y - 9, 6, 3);
+        ctx.fillStyle = "#f3e5a0"; ctx.fillRect(x - 3, y - 5, 2, 2); ctx.fillRect(x + 2, y - 5, 2, 2);
+        ctx.fillStyle = "#442f32"; ctx.fillRect(x - 2, y - 1, 4, 1);
+        ctx.fillStyle = "#74825d"; ctx.fillRect(x - 4, y + 5, 3, 3); ctx.fillRect(x + 2, y + 5, 3, 3);
+      }
+
+      function drawSkeleton(x, y) {
+        ctx.fillStyle = "#d7cfad"; ctx.fillRect(x - 4, y - 7, 8, 7);
+        ctx.fillStyle = "#373447"; ctx.fillRect(x - 3, y - 5, 2, 2); ctx.fillRect(x + 2, y - 5, 2, 2);
+        ctx.fillStyle = "#b9af91"; ctx.fillRect(x - 1, y, 2, 6); ctx.fillRect(x - 5, y + 1, 10, 2);
+        ctx.fillRect(x - 3, y + 6, 2, 3); ctx.fillRect(x + 2, y + 6, 2, 3);
+      }
+
+      function drawTrickster(x, y) {
+        ctx.fillStyle = "#d85d78"; ctx.fillRect(x - 4, y - 3, 8, 8);
+        ctx.fillStyle = "#f5c99d"; ctx.fillRect(x - 4, y - 8, 8, 6);
+        ctx.fillStyle = "#5f3754"; ctx.fillRect(x - 5, y - 9, 10, 2);
+        ctx.fillStyle = "#663047"; ctx.fillRect(x - 2, y - 1, 1, 1); ctx.fillRect(x + 2, y - 1, 1, 1);
+        ctx.fillStyle = "#eeca8c"; ctx.fillRect(x - 3, y + 5, 2, 3); ctx.fillRect(x + 2, y + 5, 2, 3);
+      }
+
+      function drawWerewolf(x, y) {
+        ctx.fillStyle = "#775843"; ctx.fillRect(x - 5, y - 1, 10, 7);
+        ctx.fillStyle = "#a78562"; ctx.fillRect(x - 5, y - 8, 10, 8);
+        ctx.fillRect(x - 5, y - 11, 3, 4); ctx.fillRect(x + 3, y - 11, 3, 4);
+        ctx.fillStyle = "#ffda72"; ctx.fillRect(x - 3, y - 5, 2, 2); ctx.fillRect(x + 2, y - 5, 2, 2);
+        ctx.fillStyle = "#533d38"; ctx.fillRect(x - 2, y - 1, 4, 2);
+        ctx.fillStyle = "#6d4e42"; ctx.fillRect(x - 4, y + 5, 3, 4); ctx.fillRect(x + 2, y + 5, 3, 4);
+      }
+
+      function drawHorseman(x, y) {
+        ctx.fillStyle = "#302c43"; ctx.fillRect(x - 7, y, 14, 9); ctx.fillRect(x - 6, y - 4, 12, 5);
+        ctx.fillStyle = "#674c68"; ctx.fillRect(x - 4, y - 10, 8, 7);
+        ctx.fillStyle = "#f7a351"; ctx.fillRect(x - 3, y - 8, 2, 2); ctx.fillRect(x + 2, y - 8, 2, 2);
+        ctx.fillStyle = "#392b43"; ctx.fillRect(x - 5, y - 12, 10, 3); ctx.fillRect(x - 3, y - 14, 6, 3);
+        ctx.fillStyle = "#d6c9d4"; ctx.fillRect(x + 5, y - 8, 8, 2); ctx.fillRect(x + 11, y - 10, 2, 5);
+        ctx.fillStyle = "#b7656c"; ctx.fillRect(x - 5, y + 8, 4, 3); ctx.fillRect(x + 2, y + 8, 4, 3);
+      }
+
+      function text(value, x, y, color = "#fff", size = 7, align = "left") {
+        ctx.font = `bold ${size}px "Courier New", monospace`;
+        ctx.textAlign = align;
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#171522";
+        ctx.fillText(value, x + 1, y + 1);
+        ctx.fillStyle = color;
+        ctx.fillText(value, x, y);
+        ctx.textAlign = "left";
+      }
+
+      function drawWorld() {
+        if (state.phase !== "night") return;
+        ctx.save();
+        ctx.fillStyle = "rgba(12, 20, 50, .30)";
+        ctx.fillRect(0, HUD, W, H - HUD - FOOT);
+        for (let i = 0; i < 22; i++) {
+          const x = (i * 47 + 13) % W, y = HUD + ((i * 29 + 7) % (H - HUD - FOOT));
+          ctx.fillStyle = i % 3 === 0 ? "#d6e5f4" : "#a4c7dd";
+          ctx.globalAlpha = .35 + Math.sin(state.elapsed * 2 + i) * .22;
+          ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#dfdfd1"; ctx.beginPath(); ctx.arc(218, 34, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#aebfd8"; ctx.fillRect(216, 29, 2, 2); ctx.fillRect(220, 34, 2, 2);
+        ctx.restore();
+      }
+
+      const keyMap = {
+        ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+        w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0]
+      };
+      function action(key) {
+        if (state.mode === "title") {
+          if (["Enter", " ", "z", "Z", "a", "A"].includes(key)) startGame();
+          return;
+        }
+        if (state.mode === "win" || state.mode === "over") {
+          if (["Enter", " ", "z", "Z", "a", "A"].includes(key)) startGame();
+          return;
+        }
+        if (keyMap[key]) {
+          state.cursor.x = clamp(state.cursor.x + keyMap[key][0], 0, COLS - 1);
+          state.cursor.y = clamp(state.cursor.y + keyMap[key][1], 0, ROWS - 1);
+        } else if (["z", "Z"].includes(key)) placeOrUpgrade();
+        else if (["x", "X", "Backspace"].includes(key)) sellTower();
+        else if ([" ", "Shift"].includes(key)) {
+          if (towerAt(state.cursor.x, state.cursor.y)) {
+            const t = towerAt(state.cursor.x, state.cursor.y);
+            t.branch = (t.branch + 1) % 2;
+            say(`${towerDefs[t.type].evolutions[t.branch]} SELECTED`);
+          } else state.selected = (state.selected + 1) % towerDefs.length;
+        } else if (["r", "R", "Enter"].includes(key)) startNight();
+        else if (["p", "P", "Escape"].includes(key) && state.phase === "night") state.paused = !state.paused;
+        else if (["m", "M"].includes(key)) {
+          state.audioOn = !state.audioOn;
+          if (state.audioOn) startAudio();
+          else if (state.audio) state.audio.master.gain.setTargetAtTime(0, state.audio.context.currentTime, .08);
+          say(state.audioOn ? "SOUND ON" : "SOUND OFF");
+        }
+      }
+
+      let moveInterval = 0;
+      window.addEventListener("keydown", event => {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) event.preventDefault();
+        startAudio();
+        if (!state.keys.has(event.key)) action(event.key);
+        state.keys.add(event.key);
+      });
+      window.addEventListener("keyup", event => state.keys.delete(event.key));
+      window.addEventListener("blur", () => state.keys.clear());
+
+      canvas.addEventListener("pointerdown", event => {
+        startAudio();
+        const rect = canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) * W / rect.width;
+        const y = (event.clientY - rect.top) * H / rect.height;
+        if (state.mode !== "game") { startGame(); return; }
+        if (y < HUD) {
+          if (x > 175) startNight();
+          else if (x > 82 && x < 175) state.selected = (state.selected + 1) % towerDefs.length;
+          else if (state.phase === "night") state.paused = !state.paused;
+          return;
+        }
+        if (y >= H - FOOT) {
+          if (state.phase === "day") placeOrUpgrade();
+          return;
+        }
+        const col = Math.floor(x / TILE) + state.camera.x;
+        const row = Math.floor((y - HUD) / TILE) + state.camera.y;
+        state.cursor.x = clamp(col, 0, COLS - 1);
+        state.cursor.y = clamp(row, 0, ROWS - 1);
+        if (state.phase === "day") placeOrUpgrade();
+      });
+
+      function loop(time) {
+        const dt = Math.min(.05, (time - state.lastTime) / 1000 || 0);
+        state.lastTime = time;
+        if (state.keys.size) {
+          moveInterval += dt;
+          if (moveInterval > .12) {
+            for (const key of state.keys) {
+              if (keyMap[key]) { action(key); break; }
+            }
+            moveInterval = 0;
+          }
+        } else moveInterval = .12;
+        update(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
