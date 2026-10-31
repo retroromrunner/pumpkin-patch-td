@@ -103,10 +103,10 @@ bonus. Attack ranges are Manhattan-distance pixels and have been increased by
 |  |  |  | Star Bloom: D0/S0/buff | D0/S0/buff | 5/6/7 tiles |
 | Bat Roost | 90 | D7/S6/swarm | Night Swarm: D9/S6/swarm | D12/S8/swarm | 85/93/102 |
 |  |  |  | Vampire Bats: D18/S6/power | D24/S8/power | 85/93/102 |
-| Thorn Maze | 125 | D14/S1/pierce | Briar Crown: D19/S2/pierce+root | D25/S3/pierce+root | 77/86/95 |
-|  |  |  | Rose Sentinel: D23/S2/pierce+root | D30/S3/pierce+root | 77/101/110 |
-| Grave Bell | 145 | D12/S1/pulse | Tollkeeper: D17/S2/pulse | D22/S2/pulse | 67/88/97 |
-|  |  |  | Soul Choir: D21/S2/pulse | D27/S3/pulse | 67/76/84 |
+| Thorn Maze | 125 | D14/S1/pierce | Briar Crown: D19/S2/root | D25/S3/root | 77/86/95 |
+|  |  |  | Rose Sentinel: D23/S2/root | D30/S3/root | 77/101/110 |
+| Grave Bell | 145 | D12/S1/pulse | Tollkeeper: D17/S2/stun | D22/S2/stun | 67/88/97 |
+|  |  |  | Soul Choir: D21/S2/stun | D27/S3/stun | 67/76/84 |
 | Star Compass | 170 | D30/S1/chain | Comet Seeker: D38/S1/chain | D49/S1/chain | 95/103/112 |
 |  |  |  | Orrery: D42/S1/chain | D55/S2/chain | 95/121/130 |
 
