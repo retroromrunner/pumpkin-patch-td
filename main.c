@@ -13,7 +13,11 @@
 #define REG_SND2CNT_H (*(volatile uint16_t *)0x0400006C)
 #define REG_SND4CNT_L (*(volatile uint16_t *)0x04000078)
 #define REG_SND4CNT_H (*(volatile uint16_t *)0x0400007C)
-
+#define REG_DISPSTAT (*(volatile uint16_t *)0x04000004)
+#define REG_IE (*(volatile uint16_t *)0x04000200)
+#define REG_IF (*(volatile uint16_t *)0x04000202)
+#define REG_IME (*(volatile uint16_t *)0x04000208)
+#define IRQ_VECTOR (*(volatile uint32_t *)0x03007FFC)
 #define SCREEN_W 240
 #define SCREEN_H 160
 #define TILE 16
@@ -308,7 +312,18 @@ static void sfx(uint8_t kind) {
   REG_SND2CNT_H = (uint16_t)(0x8000 | (2048u - 131072u / hz));
 }
 
-static void music_update(void) {
+/* Fix4: music_step advances the melody by one step. A step is one
+   VBlank IRQ (see irq_handler below), five vblanks per step in total
+   via vblank_step_count: Fix3's tempo is unchanged (title/night note
+   = 4 steps * 5 vblanks = 20 vblanks = ~334 ms; dawn note = 3 steps *
+   5 = 15 vblanks = ~250 ms; dawn silence = 6 steps * 5 = 30 vblanks
+   = ~501 ms), but the step no longer runs in the main loop. The step
+   body is byte-identical to Fix3/original; only its clock changed.
+   Fix3 also reverts every Fix1/Fix2 graphics change, so this music
+   driver is the ONLY difference from the original repo code. */
+static volatile uint8_t music_hold;
+static volatile uint8_t vblank_step_count;
+static void music_step(void) {
   if (mode == NIGHT && paused) return;
   if (dawn_note < 4) {
     if (++dawn_music_clock >= 3) {
@@ -354,7 +369,43 @@ static void music_update(void) {
   }
 }
 
+/* Fix4: VBlank IRQ music driver. Fix3 stepped the melody from the
+   main loop: music_update ran once per loop, accumulated Timer0
+   ticks, and emitted steps at loop boundaries. A host simulation of
+   that driver (see README Fix 4) shows it does NOT burst two notes
+   into one loop at any plausible loop period, but it DOES quantize
+   step times to loop boundaries, so note intervals jitter with loop
+   variability: 301-368 ms typical for random 1-3 frame loops, and
+   268-435 ms with occasional 5-frame loops, against an exact 335 ms
+   mean -- a repeating short/long lilt that reads as choppiness in
+   night, where the loop period varies (tower scans, enemy moves,
+   spawns, scrolling), while title loops are stable and sound clean.
+   The IRQ driver removes that quantization entirely: the handler
+   runs on the hardware vblank, counts vblanks, and calls music_step
+   exactly once per 5 vblanks -- never more than once per vblank,
+   never in a burst, never in the main loop. Tempo is therefore
+   exactly Fix3's (see music_step comment) and independent of loop
+   period, view, and scrolling. Pause is respected by music_step
+   itself (mode == NIGHT && paused returns early); music_hold guards
+   the main-loop reset sequences in stop_music/start_night/unpause
+   so the IRQ cannot run mid-reset and mix old and new state. SFX
+   stay on the noise channel in night (see sfx), untouched. */
+#define MUSIC_VBLANKS_PER_STEP 5
+/* Fix5: normal function, NOT interrupt("IRQ") — BIOS dispatches the
+   handler as an ordinary subroutine and does the IRQ return itself,
+   so this must return with a plain bx lr. See README Fix 5. */
+static void irq_handler(void) {
+  if (REG_IF & 0x0001) {
+    REG_IF = 0x0001;
+    if (++vblank_step_count >= MUSIC_VBLANKS_PER_STEP) {
+      vblank_step_count = 0;
+      if (!music_hold) music_step();
+    }
+  }
+}
+
 static void stop_music(void) {
+  music_hold = 1;
   REG_SND1CNT_H = 0x0080;
   REG_SND2CNT_L = 0x0080;
   REG_SND4CNT_L = 0;
@@ -364,6 +415,8 @@ static void stop_music(void) {
   music_clock = 0;
   dawn_note = 5;
   dawn_music_clock = 0;
+  vblank_step_count = 0;
+  music_hold = 0;
 }
 
 static void play_dawn_music(void) {
@@ -501,12 +554,15 @@ static void sell_tower(void) {
 static void start_night(void) {
   int i;
   if (mode != DAY) return;
+  music_hold = 1;
   dawn_note = 5;
   dawn_music_clock = 0;
   mode = NIGHT; paused = 0; enemy_count = 0;
   wave_clear_clock = 0;
   music_clock = 0;
   night_note = 0;
+  vblank_step_count = 0;
+  music_hold = 0;
   tower_hover_timer = 0;
   branch_preview_active = 0;
   spawn_left = (uint8_t)(7 + day * 2 + (day == 10) + (hard_mode ? 3 : 0));
@@ -926,7 +982,7 @@ static void key_update(void) {
     else if (mode == NIGHT) {
       paused ^= 1;
       if (paused) stop_music();
-      else music_clock = 3;
+      else { music_hold = 1; music_clock = 3; music_hold = 0; }
     }
   }
   old_keys = keys;
@@ -1581,6 +1637,16 @@ int main(void) {
   REG_SOUNDCNT_L = 0xFF77;
   REG_SOUNDCNT_H = 0x0002;
   REG_SND1CNT_L = 0;
+  /* Fix4: VBlank IRQ music driver (see irq_handler). IME is cleared
+     while the vector and enables are installed, then set: the BIOS
+     IRQ dispatcher jumps to the address in IRQ_VECTOR, and the
+     handler acknowledges VBlank in IF and steps the melody once per
+     5 vblanks, never in the main loop. */
+  REG_IME = 0;
+  IRQ_VECTOR = (uint32_t)irq_handler;
+  REG_IE = 0x0001;
+  REG_DISPSTAT = 0x0008;
+  REG_IME = 1;
   build_route_map();
   for (;;) {
     key_update();
@@ -1592,7 +1658,6 @@ int main(void) {
     if (monster_hover_timer) monster_hover_timer--;
     frame_count++;
     if (mode == NIGHT && ++night_star_offset >= 118) night_star_offset = 0;
-    music_update();
     render();
   }
   return 0;

@@ -1,23 +1,180 @@
+When the sun goes down, they come for the pumpkins. Pumpkin Parade Guardian is a cozy-spooky tower defense for Game Boy Advance: spend the calm daylight hours planting scarecrows, lanterns, cauldrons, and stranger defenses around your patch, then hold the line as zombies, ghosts, banshees, and worse parade down the path at night. Survive ten nights, grow your towers into wild evolutions, and face the Headless Horseman himself on the final night — every pumpkin you save is a victory.
+
+## Fix 5 — Fix4 broken on phone: BIOS IRQ-return bug (approved Oct 31, 2026; shipped as release 1.1)
+
+Fix 4 verdict (Cori, Oct 31, 2026): "This one loads but the title
+screen is a blue bar at the top and the rest all black buttons do
+nothing so game is broke" — Fix4 is superseded and must not be
+re-delivered. The symptom fits a hang mid-way through the first
+title draw: the first title frame draws directly to the displayed
+VRAM page top-to-bottom, the first VBlank IRQ fires ~16 ms after
+start, and the main loop never progressed past it.
+
+Root cause, proven from the binary (not guessed): Fix4's handler was
+declared __attribute__((interrupt("IRQ"))). objdump of Fix4's ELF
+shows irq_handler starting with `sub lr, lr, #4` and returning via
+`ldm sp!, {r0-r7, ip, pc}^` — a raw IRQ return that restores CPSR
+from SPSR. That is wrong here: the GBA BIOS IRQ dispatcher calls the
+user handler at 0x03007FFC as an ORDINARY subroutine in system mode
+and performs the IRQ return itself, so the handler must return with
+a plain `bx lr`. In Fix4, lr held the BIOS return address, not an
+IRQ return address, so subtracting 4 and returning through SPSR
+jumped to the wrong place and hung the game on the first vblank.
+Fix4's desktop test missed it because it only checked "no crash
+dialog / no Jumped to invalid address" — a hang produces no crash
+dialog either, so that was never proof the game runs. Fix5's desktop
+test below therefore checks actual progression (PC / VRAM), not just
+absence of a crash dialog.
+
+Fix, in main.c only: irq_handler is now a normal C function (the
+interrupt("IRQ") attribute is removed entirely); the handler body is
+identical — check REG_IF & 0x0001, clear it, count vblanks, call
+music_step() exactly once per 5 vblanks, skip when music_hold is
+set. vblank_step_count is now volatile (it is written in IRQ
+context and reset in main-loop code; Fix4 left it non-volatile).
+DISPSTAT=0x0008, IE=0x0001, IME install order, IRQ_VECTOR install,
+music_hold guards, and tempo are all unchanged from Fix4: title/night
+note = 4 steps x 5 vblanks = 20 vblanks = ~335 ms, dawn note = 3 x 5
+= 15 vblanks = ~251 ms, dawn silence = 6 x 5 = 30 vblanks = ~502 ms,
+knob MUSIC_VBLANKS_PER_STEP=5. No melody, bass, play_tone envelope,
+render, logic, control, or graphics change; no Fix1/Fix2 render
+change reintroduced; no revert to the Fix3 timer driver; startup.s
+stack setup unchanged (BIOS dispatch runs the handler on the main
+stack, SP 0x03007F00, not the IRQ stack).
+
+Desktop proof (Fix5, verified in mGBA-Qt 0.10.5 via its GDB stub,
+RSP single-stepping — NOT "no crash dialog"): objdump shows every
+Fix5 irq_handler return is `bx lr` (bxeq/bxls/bxne/bx at 0x129c,
+0x12c0, 0x12d8, 0x13dc; no `sub lr, #4`, no `ldm {..., pc}^`), while
+Fix4 starts with `sub lr, lr, #4` and returns via `ldm {..., pc}^`.
+Stepping the first VBlank IRQ in Fix5: handler 0x1290 -> BIOS 0x194
+-> BIOS 0x198 -> interrupted ROM code 0x08000be8 (rect/render),
+frame_count already 1 — a clean single dispatch and return to the
+main loop. Stepping Fix4's first IRQ instead: handler -> BIOS
+0x190 (exactly 4 bytes early) -> handler entry 0x08000d00 AGAIN
+(the instruction at 0x190 re-dispatches) -> a second handler pass
+-> BIOS 0x9c/0xa0... walking BIOS vector code in a corrupted
+state — that re-entry is the hang behind Cori's blue-bar/black
+title. Host frames are byte-identical to Fix4 on all 7 scenes and
+controls pass (see Fix 4 QA, unchanged); IRQ tempo simulation gives
+exactly 20-vblank title/night onsets (~335 ms), 15-vblank dawn
+(~251 ms), 30-vblank dawn silence (~502 ms), paused = silent.
+Limitation, stated plainly: mGBA-Qt's GDB server in this VM pauses
+at startup under -g and its continue-after-breakpoint never resumes
+(it timed out on every second continue, for both Fix4 and Fix5, even
+after stepping away from the breakpoint), so a free-run VRAM dump
+of a full title frame after several seconds could NOT be obtained
+here — stepping proves the IRQ return chain, it does not prove a
+full rendered title on desktop. Cori's RetroArch phone test (full
+title, working buttons, evenly spaced night music) remains the
+real gate.
+
+## Fix 4 — night music choppiness, VBlank IRQ driver (unpushed, superseded by Fix 5)
+
+Fix 3 verdict: intro music perfect, animation/scrolling back to normal,
+but night music was choppy -- notes 3 and 4 seemed to play too quickly
+together while other notes had better spacing, and scrolling did not
+change it (consistently choppy in every view). Dawn may have had the
+same fault, too short to notice.
+
+Diagnosis, with evidence (not guessed): a host simulation of Fix 3's
+driver shows it does NOT burst two notes into a single loop at any
+plausible loop period -- a note needs 4 steps, a step needs 5 vblanks
+of accumulated time, so two notes in one loop would need a 40-frame
+loop. What the simulation DOES show is loop-boundary quantization:
+Fix 3 emitted steps only at main-loop ends, so step times (and hence
+note times) jittered with the loop period: stable loops give an exact
+335 ms/note, random 1-3 frame loops give 301-368 ms, and loops with
+occasional 5-frame loops give 268-435 ms, all averaging 334 ms -- a
+repeating short/long lilt. Night loops vary (tower scans, enemy moves,
+spawns, scrolling) while title loops are stable, which matches Cori's
+report exactly: intro clean, night choppy, scrolling irrelevant.
+Tempo itself was right (Fix 3's ~334 ms) and is unchanged here.
+
+Fix, in main.c only (rules, art, HUD, controls, 10-night/8-tower design
+unchanged; still Mode 4, so index.html is unaffected; graphics are
+exactly Fix 3's = the original repo render): the melody is now stepped
+by a VBlank IRQ, not by the main loop. DISPSTAT bit 3 enables the
+VBlank IRQ, IE enables VBlank only, IME is set after the handler
+address is installed at 0x03007FFC (gcc interrupt("IRQ"), ARM code),
+and the handler acknowledges VBlank in IF, counts vblanks, and calls
+music_step exactly once per 5 vblanks -- never more than once per
+vblank, never in a burst. The main-loop music_update call and the
+Timer0 driver are removed entirely; both drivers never run together.
+Tempo is exactly Fix 3's: title/night note = 4 steps x 5 vblanks =
+20 vblanks = ~335 ms; dawn note = 3 x 5 = 15 vblanks = ~251 ms; dawn
+silence = 6 x 5 = 30 vblanks = ~502 ms; the tuning knob is now
+MUSIC_VBLANKS_PER_STEP (5). Race safety: music_step runs in IRQ
+context, so stop_music, start_night, and the unpause music_clock reset
+are guarded by a music_hold flag the handler checks and skips on
+(step counter still resets, so no burst follows a hold); pause still
+silences music via music_step's own paused check and resumes without
+a burst. Night SFX stay on the separate noise channel.
+
+Verified: diff vs Fix 3 main.c is ONLY the IRQ driver, the hold
+guards, the main-loop call removal, and this README section -- render,
+key_update (except the hold wrapper on the unpause assignment),
+update_game, melodies, and play_tone envelope are unchanged; host
+frames are 0 bytes different from Fix 3 on all 7 scenes (title, day
+build, crowded night, scrolled-away night, pause, win, lose);
+controls pass including two quick Right presses moving the cursor
+two cells (5 -> 6 -> 7); IRQ-driver simulation gives exactly
+335 ms/note (night/title) and 251 ms/note (dawn) at any loop period.
+Desktop mGBA (extracted AppImage binary under Xvfb) ran the ROM for a full 20-second timeout with no crash dialog and no "Jumped to invalid address" -- only expected ALSA no-sound-card warnings. Boot signal only: the OpenGL viewport is not capturable in this environment, so this does not prove audio.
+
+Not proven: RetroArch night-music smoothness by ear on Cori's phone
+(the real gate -- Fix 2's lag and Fix 3's choppiness only showed
+there), real-device audio, Nights 6-10 balance, and the browser
+wrapper (index.html untouched, not rebuilt).
+
+## Fix 3 -- original graphics restored, music tempo slowed further (unpushed, awaiting playtest)
+
+Cori's Fix2 playtest verdict, followed literally: Fix2's animation/graphics were
+MORE laggy than the original repo version (cursor movement slower, and two quick
+Right presses sometimes missed the second press), while Fix2's music tempo WAS
+consistent across all views but still faster than the original tracks. Fix3 therefore
+reverts every graphics/render change and keeps only the consistent music driver.
+
+Fix, in main.c only: start from the original repo code (commit 7ae11be) and change
+ONLY the music driver. Reverted in full: no static EWRAM backbuffer, no second work
+buffer, no DMA3 copy, no static-buffer shift/strip redraw, no projectile-division
+precomputation. Render, key_update, update_game (called twice per loop), and the
+main loop are byte-identical to the original: every frame draws directly to the hidden
+VRAM Mode 4 page (tiles + towers + enemies + projectiles + HUD + message), waits for
+vblank, and flips the page. The diff against the original main.c is only: Timer0
+registers, MUSIC_TICKS_PER_FRAME (1097), the music_step/music_update driver, timer
+fields reset in stop_music, and Timer0 start in main -- verified by git diff (57
+insertions, 1 renamed line, no render/logic change). Host-harness frames are
+pixel-identical to the original for title, day build, crowded night, scrolled-away
+night, pause, win, and lose (0 differing bytes on all 7 scenes), and cursor controls
+match the original exactly, including two quick Right presses moving the cursor
+two cells (5 -> 6 -> 7 in the harness).
+
+Tempo: the timer-driven driver is kept (Timer0 at 65536 Hz, 1097 ticks per GBA frame,
+remainder carried, steps capped at 4 per loop so a stall cannot burst notes, pause
+discards elapsed time and resumes without a burst, night SFX stay on the separate
+noise channel, title/night/dawn internal counters unchanged), so tempo stays
+view-independent as in Fix2. MUSIC_TICKS_PER_STEP is now 5 (Fix2 used 3, which Cori
+said was still too fast; a marginal 4 was not chosen, to avoid another round).
+Resulting intervals (1 vblank ~ 16.7 ms): title/night note = 4 steps x 5 ticks =
+20 ticks = ~334 ms; dawn note = 3 steps x 5 = 15 ticks = ~250 ms; dawn silence =
+6 steps x 5 = 30 ticks = ~501 ms. Scheduler simulation: Fix3 holds ~331-335 ms/note
+(mean) at loop periods of 1, 2, and 3 frames, vs Fix2's ~201 ms and Fix1's ~67 ms.
+These are a restored-by-ear target for Cori to verify -- no emulator audio capture
+was possible here, so the exact original milliseconds were not measured; if it
+still feels off, the tuning knob is the one constant MUSIC_TICKS_PER_STEP.
+
+Not proven: RetroArch tempo by ear and cursor fluidity on Cori's phone (the real
+gate, since Fix2's lag only showed there), real-device audio, Nights 6-10 balance,
+and the browser wrapper (index.html untouched, not rebuilt). Desktop mGBA booted
+the Fix3 ROM for a full 20-second run with no crash dialog or invalid jump
+(boot signal only; the OpenGL viewport is not capturable in this environment).
+
 # Pumpkin Parade Guardian
 
 ![screenshot](images/pumpkin-parade-0.png) ![screenshot](images/pumpkin-parade-1.png)
 
-Pumpkin Parade Guardian is a GBA homebrew tower defense. The ROM has a 240×160
-screen, pixel-art towers and monsters, a scrolling 30×18 map, and original
-Game Boy Advance PSG audio. The title screen plays a fast, gloomy harmonic
-minor melody; gameplay uses responsive sound effects, including a low noise
-shuffle as the cursor crosses the patch. A separate gloomy harmonic-minor
-score plays during each night at a quicker note rate and stops when dawn
-returns. A brief major-key cue celebrates each surviving wave. PSG routing is
-initialized explicitly, and pulse/noise notes fade through their volume
-envelopes instead of ending at an abrupt full-volume cutoff.
-
-The GBA build uses a warm autumn palette for the build phase and a deep
-purple-green palette at night. Its compact 3×5 pixel lettering has added
-character spacing for readability, and the renderer uses paired pixel writes
-to keep the screen and controls responsive on original GBA hardware. Game
-state is placed in internal work RAM so it also initializes correctly when
-an emulator skips the GBA BIOS.
+By day, the patch is yours: plant towers, plan your defenses, and spend your candy corn and moon seeds wisely. By night, the parade marches in — zombies and trick-or-treaters first, then ghosts, banshees, moths, and broods that split when they fall. Warm autumn days give way to deep purple-green nights, with a gloomy Halloween score that keeps perfect time no matter how crowded the parade gets. Hold the patch for ten nights, and the Headless Horseman himself leads the final parade.
 
 ## Build
 
