@@ -119,10 +119,17 @@ Evolved towers use larger, branch-colored projectiles. Crow Caller and Straw
 Sentinel also have distinct silhouettes and colors. Their damage, range, and
 attack speed are calculated separately, so the preview matches combat.
 
-Three costly towers add new late-game strategies: Thorn Maze (125 candy)
-damages and roots groups, Grave Bell (145 candy) pulses damage and slows nearby
-monsters, and Star Compass (170 candy) chains astral bolts between enemies.
-Each has two evolution branches that strengthen its signature effect.
+Late-game towers have higher purchase costs; they use the same level-up costs
+and evolution selection as the other towers.
+
+| Tower | Cost | Level 1 | Evolution branches |
+|---|---:|---|---|
+| Thorn Maze | 125 | D14/S1/pierce+root | Briar Crown (rooting area burst); Rose Sentinel (greater damage and range) |
+| Grave Bell | 145 | D12/S1/pulse | Tollkeeper (wider slowing pulse); Soul Choir (stronger, faster pulse) |
+| Star Compass | 170 | D30/S1/chain | Comet Seeker (faster chain bolts); Orrery (longer-range chain bolts) |
+
+Thorn Maze damages nearby monsters and roots them; Grave Bell damages and slows
+nearby monsters; Star Compass chains damage to up to two nearby enemies.
 
 ## Monster stats
 
