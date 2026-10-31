@@ -1,5 +1,7 @@
 # Pumpkin Parade Guardian
 
+![screenshot](images/pumpkin-parade-0.png) ![screenshot](images/pumpkin-parade-1.png)
+
 Pumpkin Parade Guardian is a GBA homebrew tower defense. The ROM has a 240×160
 screen, pixel-art towers and monsters, a scrolling 30×18 map, and original
 Game Boy Advance PSG audio. The title screen plays a fast, gloomy harmonic
