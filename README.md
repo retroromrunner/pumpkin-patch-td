@@ -103,7 +103,7 @@ bonus. Attack ranges are Manhattan-distance pixels and have been increased by
 |  |  |  | Star Bloom: D0/S0/buff | D0/S0/buff | 5/6/7 tiles |
 | Bat Roost | 90 | D7/S6/swarm | Night Swarm: D9/S6/swarm | D12/S8/swarm | 85/93/102 |
 |  |  |  | Vampire Bats: D18/S6/power | D24/S8/power | 85/93/102 |
-| Thorn Maze | 125 | D14/S1/pierce+root | Briar Crown: D19/S2/pierce+root | D25/S3/pierce+root | 77/86/95 |
+| Thorn Maze | 125 | D14/S1/pierce | Briar Crown: D19/S2/pierce+root | D25/S3/pierce+root | 77/86/95 |
 |  |  |  | Rose Sentinel: D23/S2/pierce+root | D30/S3/pierce+root | 77/101/110 |
 | Grave Bell | 145 | D12/S1/pulse | Tollkeeper: D17/S2/pulse | D22/S2/pulse | 67/88/97 |
 |  |  |  | Soul Choir: D21/S2/pulse | D27/S3/pulse | 67/76/84 |
@@ -128,12 +128,14 @@ attack speed are calculated separately, so the preview matches combat.
 Late-game towers have higher purchase costs; they use the same level-up costs
 and evolution selection as the other towers.
 
-Thorn Maze damages nearby monsters and roots them; Briar Crown specializes in
-rooting enemy groups, while Rose Sentinel trades control for greater damage and
-range. Grave Bell damages and slows nearby monsters; Tollkeeper projects a
-wider slowing pulse, while Soul Choir delivers stronger, faster pulses. Star
-Compass chains damage to up to two nearby enemies; Comet Seeker fires chain
-bolts more rapidly, while Orrery extends the reach of its chain attacks.
+Thorn Maze pierces into clustered enemies, damaging nearby monsters for half
+damage and hindering them; Briar Crown emphasizes area control, while Rose
+Sentinel trades control for greater damage and range. Grave Bell damages and
+slows nearby monsters; Tollkeeper projects a wider slowing pulse, while Soul
+Choir delivers stronger, faster pulses. Star Compass chains damage to up to
+two nearby enemies, dealing reduced damage to chained targets; Comet Seeker
+fires chain bolts more rapidly, while Orrery extends the reach of its chain
+attacks.
 
 ## Monster stats
 
