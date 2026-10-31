@@ -498,7 +498,7 @@ static void start_night(void) {
   night_note = 0;
   tower_hover_timer = 0;
   branch_preview_active = 0;
-  spawn_left = (uint8_t)(7 + day * 2 + (day == 5));
+  spawn_left = (uint8_t)(7 + day * 2 + (day == 5) + (hard_mode ? 3 : 0));
   spawn_clock = 30;
   for (i = 0; i < tower_count; i++) towers[i].cooldown = 2;
   sfx(4); set_message(8, day);
@@ -513,17 +513,22 @@ static void spawn_enemy(void) {
   e->x = -8 * 256; e->y = 2 * TILE * 256 + 8 * 256;
   e->target = 1; e->slow = 0; e->poison = 0; e->glue_slow = 0;
   if (day == 5 && spawn_left == 1) {
-    e->kind = HORSEMAN; e->hp = 450; e->speed = 125; e->reward = 45;
+    e->kind = HORSEMAN; e->hp = hard_mode ? 540 : 450;
+    e->speed = 125; e->reward = 45;
   } else if (day >= 3 && roll < 48) {
     e->kind = GHOST; e->hp = (int16_t)(32 + day * 9); e->speed = 220; e->reward = 9;
   } else if (day >= 2 && roll < 98) {
     e->kind = SKELETON; e->hp = (int16_t)(24 + day * 6); e->speed = 285; e->reward = 8;
   } else if (day >= 3 && roll < 147) {
-    e->kind = WEREWOLF; e->hp = (int16_t)(95 + day * 18); e->speed = 175; e->reward = 17;
+    e->kind = WEREWOLF;
+    e->hp = (int16_t)((95 + day * 18) * (hard_mode ? 120 : 100) / 100);
+    e->speed = 175; e->reward = 17;
   } else if (roll < 190) {
     e->kind = TRICKSTER; e->hp = (int16_t)(12 + day * 4); e->speed = 300; e->reward = 5;
   } else {
-    e->kind = ZOMBIE; e->hp = (int16_t)(30 + day * 8); e->speed = 130; e->reward = 11;
+    e->kind = ZOMBIE;
+    e->hp = (int16_t)((30 + day * 8) * (hard_mode ? 120 : 100) / 100);
+    e->speed = 130; e->reward = 11;
   }
   e->max_hp = e->hp;
   e->hp_bar_scale = (uint8_t)(3584u / (uint16_t)e->max_hp);
@@ -767,7 +772,7 @@ static void new_game(void) {
   int i;
   stop_music();
   mode = DAY; day = 1; candy = 150; seeds = 0;
-  pumpkins = hard_mode ? 10 : 15;
+  pumpkins = hard_mode ? 8 : 12;
   selected = 0;
   branch_preview_active = 0;
   tower_count = enemy_count = 0; camera_x = camera_y = 0;
@@ -1390,7 +1395,7 @@ static void draw_title(void) {
   rect(169, 96, 12, 12, 12); rect(171, 93, 8, 3, 12);
   rect(171, 99, 2, 2, 26); rect(177, 99, 2, 2, 26);
   text("5 NIGHTS  5 TOWERS", 64, 124, 13, 1);
-  centered(hard_mode ? "HARD - 10 PUMPKINS" : "NORMAL - 15 PUMPKINS",
+  centered(hard_mode ? "HARD - 8 PUMPKINS" : "NORMAL - 12 PUMPKINS",
     132, 18, 1);
   centered("A / START TO BEGIN", 143 + ((frame_count >> 3) & 1), 18, 1);
   centered("LEFT/RIGHT: MODE", 154, 12, 1);
@@ -1425,7 +1430,7 @@ static void render(void) {
 
 int main(void) {
   unsigned i, tick;
-  mode = TITLE; day = 1; pumpkins = 15; hard_mode = 0;
+  mode = TITLE; day = 1; pumpkins = 12; hard_mode = 0;
   candy = 150; random_seed = 0x3d71;
   dawn_note = 5;
   cursor_x = 2; cursor_y = 3;

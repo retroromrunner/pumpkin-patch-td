@@ -41,8 +41,8 @@ emulators can read them during early initialization.
 - Select (Shift on Webmulator): cycle tower types; over a tower, preview its
   evolution or next upgrade
 - Start (Enter on Webmulator): begin the night or pause/resume the parade
-- Title screen Left/Right: choose difficulty (Normal starts with 15 pumpkins;
-  Hard starts with 10)
+- Title screen Left/Right: choose difficulty (Normal starts with 12 pumpkins;
+  Hard starts with 8)
 - Select previews only; it never changes tower stats or spends candy
 
 The top build HUD previews the selected tower's purchase cost and
@@ -119,7 +119,9 @@ attack speed are calculated separately, so the preview matches combat.
 
 HP is the value on the first night that monster appears; zombie, skeleton,
 ghost, werewolf, and trickster HP scale with the night as shown. Speed is an
-internal movement value (higher is faster). Candy is the kill reward.
+internal movement value (higher is faster). Candy is the kill reward. Hard
+mode adds three monsters to each wave and increases zombie, werewolf, and
+Horseman HP by 20%; other enemy stats are unchanged.
 
 | Monster | Appears | HP | Speed | Candy | Notes |
 |---|---:|---:|---:|---:|---|
