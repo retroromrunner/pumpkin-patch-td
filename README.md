@@ -67,12 +67,14 @@ appear after the enemy takes damage; their scaling is precomputed at spawn to
 avoid per-frame division during combat. Night sky star positions are also
 precomputed, and off-screen towers are skipped during drawing.
 
-Defend the patch for five nights. Candy corn pays for towers and upgrades;
+Defend the patch for ten nights. Candy corn pays for towers and upgrades;
 moon seeds from surviving pumpkins pay for final upgrades. Lanterns and
 cauldrons can harm ghosts, while physical towers cannot. Ghosts first appear
 on Night 3, giving the player time to afford magic defenses. Towers fire visible
-shots and enemies show their remaining health; the faster night parade ends
-at dawn shortly after the final enemy is defeated or escapes.
+shots and enemies show their remaining health. Pumpkin Broods, Bramble Brutes,
+Banshees, and Moon Moths join the parade from Nights 6-9; Broods split into two
+seedlings when defeated. The Headless Horseman leads Night 10. The faster night
+parade ends at dawn shortly after the final enemy is defeated or escapes.
 The first night's zombies and trick-or-treaters have reduced health. The
 bottom-right readout uses `D` for damage and `S` for attack speed, followed by
 the effect (for example `D20/S2/SWAT`). Selecting an evolution branch shows
@@ -117,19 +119,30 @@ Evolved towers use larger, branch-colored projectiles. Crow Caller and Straw
 Sentinel also have distinct silhouettes and colors. Their damage, range, and
 attack speed are calculated separately, so the preview matches combat.
 
+Three costly towers add new late-game strategies: Thorn Maze (125 candy)
+damages and roots groups, Grave Bell (145 candy) pulses damage and slows nearby
+monsters, and Star Compass (170 candy) chains astral bolts between enemies.
+Each has two evolution branches that strengthen its signature effect.
+
 ## Monster stats
 
-HP is the value on the first night that monster appears; zombie, skeleton,
-ghost, werewolf, and trickster HP scale with the night as shown. Speed is an
-internal movement value (higher is faster). Candy is the kill reward. Hard
-mode adds three monsters to each wave and increases zombie, werewolf, and
-Horseman HP by 20%; other enemy stats are unchanged.
+HP is the value on the first night that monster appears. HP increases by the
+listed amount per night through Night 4; from Night 5 onward, each night's HP
+increase is 25% larger (rounded down). Pumpkin Brood and Seedling HP use the
+same scaling. Speed is an internal movement value (higher is faster). Candy is
+the kill reward. Hard mode adds three monsters to each wave and increases
+zombie, werewolf, and Horseman HP by 20%; other enemy stats are unchanged.
 
 | Monster | Appears | HP | Speed | Candy | Notes |
 |---|---:|---:|---:|---:|---|
 | Zombie | Night 1 | 38 (+8/night) | 130 | 11 | Slow and sturdy |
 | Trick-or-treater | Night 1 | 16 (+4/night) | 300 | 5 | Fast, fragile swarm |
 | Skeleton | Night 2 | 36 (+6/night) | 285 | 8 | Fast, reduced early HP |
-| Ghost | Night 3 | 59 (+9/night) | 220 | 9 | Only lantern and cauldron attacks can hurt it |
+| Ghost | Night 3 | 59 (+9/night) | 220 | 9 | Only magic towers can hurt it |
 | Werewolf | Night 3 | 149 (+18/night) | 175 | 17 | Tough |
-| Headless Horseman | Night 5 | 450 | 125 | 45 | Final boss |
+| Pumpkin Brood | Night 6 | 284 | 170 | 18 | Splits into two 86-HP seedlings on defeat |
+| Seedling | On Brood defeat | 86 | 310 | 3 | Two per Brood; HP scales with wave |
+| Bramble Brute | Night 7 | 340 | 140 | 25 | Heavy, slow bruiser |
+| Banshee | Night 8 | 185 | 230 | 18 | Only magic towers can hurt it |
+| Moon Moth | Night 9 | 164 | 355 | 14 | Very fast flyer |
+| Headless Horseman | Night 10 | 1300 | 135 | 75 | Final boss; 1560 HP in Hard |

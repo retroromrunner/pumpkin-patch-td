@@ -80,7 +80,10 @@
         { name: "JACK LANTERN", short: "JAK", cost: 75, color: "#ff873d", range: 44, rate: 1.05, damage: 20, magic: true, evolutions: ["INFERNO JACK", "WILL-O-WISP"] },
         { name: "WITCH CAULDRON", short: "CAU", cost: 65, color: "#a6db71", range: 48, rate: 1.28, damage: 5, magic: true, evolutions: ["CANDY GLUE", "HEX POT"] },
         { name: "MOONFLOWER", short: "MOO", cost: 80, color: "#84d9e8", range: 53, rate: 0, damage: 0, magic: true, evolutions: ["BLOOD MOON", "STAR BLOOM"] },
-        { name: "BAT ROOST", short: "BAT", cost: 90, color: "#bd9bea", range: 67, rate: .48, damage: 6, magic: false, evolutions: ["NIGHT SWARM", "VAMPIRE BATS"] }
+        { name: "BAT ROOST", short: "BAT", cost: 90, color: "#bd9bea", range: 67, rate: .48, damage: 6, magic: false, evolutions: ["NIGHT SWARM", "VAMPIRE BATS"] },
+        { name: "THORN MAZE", short: "THR", cost: 125, color: "#a7d45f", range: 62, rate: 1.65, damage: 14, magic: false, evolutions: ["BRIAR CROWN", "ROSE SENTINEL"] },
+        { name: "GRAVE BELL", short: "BEL", cost: 145, color: "#91a4e8", range: 54, rate: 2.2, damage: 12, magic: true, evolutions: ["TOLLKEEPER", "SOUL CHOIR"] },
+        { name: "STAR COMPASS", short: "COM", cost: 170, color: "#f1d77a", range: 76, rate: 2.8, damage: 30, magic: true, evolutions: ["COMET SEEKER", "ORRERY"] }
       ];
       const path = [
         [-1, 2], [4, 2], [4, 5], [9, 5], [9, 2], [14, 2], [14, 7],
@@ -259,7 +262,7 @@
         state.phase = "night";
         state.nightTime = 0;
         state.spawnLeft = 7 + state.day * 3;
-        if (state.day === 5) state.spawnLeft += 1;
+        if (state.day === 10) state.spawnLeft += 1;
         state.spawnTimer = .7;
         state.enemies = [];
         state.shots = [];
@@ -269,14 +272,23 @@
         playMusic();
       }
 
+      function scaleEnemyHp(base, perWave, day) {
+        const scaledWaves = day <= 4 ? day : 4 + (day - 4) * 1.25;
+        return base + Math.floor(perWave * scaledWaves);
+      }
+
       function enemyTemplate(day, index) {
-        if (day === 5 && index === 0) return { kind: "horseman", hp: 470, speed: 17, reward: 45, size: 12, color: "#a869d6", magicOnly: false };
+        if (day === 10 && index === 8 + day * 3) return { kind: "horseman", hp: 1300, speed: 18, reward: 75, size: 14, color: "#a869d6", magicOnly: false };
         const roll = Math.random();
-        if (day >= 2 && roll < .2) return { kind: "ghost", hp: 35 + day * 9, speed: 28 + day, reward: 9, size: 9, color: "#9ce9e9", magicOnly: true };
-        if (day >= 2 && roll < .43) return { kind: "skeleton", hp: 30 + day * 8, speed: 38 + day * 2, reward: 8, size: 9, color: "#e8dfb7", magicOnly: false };
-        if (day >= 3 && roll < .64) return { kind: "werewolf", hp: 95 + day * 18, speed: 20 + day * 1.3, reward: 18, size: 11, color: "#b68b65", magicOnly: false };
-        if (roll < .78) return { kind: "trickster", hp: 21 + day * 6, speed: 42, reward: 5, size: 8, color: "#ef9bb7", magicOnly: false };
-        return { kind: "zombie", hp: 62 + day * 16, speed: 17 + day, reward: 11, size: 10, color: "#82bf72", magicOnly: false };
+        if (day >= 9 && roll < .15) return { kind: "moonmoth", hp: scaleEnemyHp(82, 8, day), speed: 57, reward: 14, size: 8, color: "#d8d0ff", magicOnly: false };
+        if (day >= 8 && roll < .3) return { kind: "banshee", hp: scaleEnemyHp(95, 10, day), speed: 34, reward: 18, size: 10, color: "#d9a8f4", magicOnly: true };
+        if (day >= 7 && roll < .45) return { kind: "bramble", hp: scaleEnemyHp(185, 20, day), speed: 14, reward: 25, size: 12, color: "#718d49", magicOnly: false };
+        if (day >= 6 && roll < .6) return { kind: "brood", hp: scaleEnemyHp(200, 13, day), speed: 21, reward: 18, size: 11, color: "#e98e3e", magicOnly: false };
+        if (day >= 2 && roll < .2) return { kind: "ghost", hp: scaleEnemyHp(35, 9, day), speed: 28 + day, reward: 9, size: 9, color: "#9ce9e9", magicOnly: true };
+        if (day >= 2 && roll < .43) return { kind: "skeleton", hp: scaleEnemyHp(30, 8, day), speed: 38 + day * 2, reward: 8, size: 9, color: "#e8dfb7", magicOnly: false };
+        if (day >= 3 && roll < .64) return { kind: "werewolf", hp: scaleEnemyHp(95, 18, day), speed: 20 + day * 1.3, reward: 18, size: 11, color: "#b68b65", magicOnly: false };
+        if (roll < .78) return { kind: "trickster", hp: scaleEnemyHp(21, 6, day), speed: 42, reward: 5, size: 8, color: "#ef9bb7", magicOnly: false };
+        return { kind: "zombie", hp: scaleEnemyHp(62, 16, day), speed: 17 + day, reward: 11, size: 10, color: "#82bf72", magicOnly: false };
       }
 
       function spawnEnemy() {
@@ -285,7 +297,7 @@
         state.enemies.push({
           ...template, maxHp: template.hp, x: first[0] * TILE + TILE / 2,
           y: first[1] * TILE + TILE / 2, target: 1, slow: 0, poison: 0,
-          bob: Math.random() * Math.PI * 2, flash: 0
+          bob: Math.random() * Math.PI * 2, flash: 0, minion: false
         });
         state.spawnLeft--;
       }
@@ -296,7 +308,7 @@
           say("THE PATCH IS LOST...", 99);
           return;
         }
-        if (state.day >= 5) {
+        if (state.day >= 10) {
           state.mode = "win";
           sfx("win");
           say("THE PATCH IS SAFE. HAPPY HARVEST!", 99);
@@ -403,19 +415,26 @@
           }
           if (target && tower.cooldown <= 0) {
             const damage = def.damage * (1 + (level - 1) * .42);
-            const splash = tower.type === 0 && level >= 3 && tower.branch === 0;
-            const slow = tower.type === 2;
+            const splash = (tower.type === 0 && level >= 3 && tower.branch === 0) || tower.type === 5 || tower.type === 6;
+            const slow = tower.type === 2 || tower.type === 5 || tower.type === 6;
+            const chain = tower.type === 7;
             if (tower.type === 4 && level >= 3 && tower.branch === 1) {
               target.hp -= damage * 2.1;
               particle(target.x, target.y, "#dcb8ff", 3);
             } else {
               state.shots.push({
                 x: tower.x * TILE + 8, y: tower.y * TILE + 7,
-                target, speed: tower.type === 4 ? 170 : 125, damage,
-                color: def.color, splash, slow, poison: tower.type === 2 && level >= 2
+                target, speed: tower.type === 4 ? 170 : tower.type === 7 ? 210 : 125, damage,
+                color: def.color, splash, slow, chain, poison: tower.type === 2 && level >= 2
               });
             }
             if (tower.type === 1 && level >= 2) target.poison = Math.max(target.poison, 1.2);
+            if (tower.type === 6) {
+              for (const enemy of state.enemies) {
+                if (Math.hypot(enemy.x - target.x, enemy.y - target.y) < 30)
+                  enemy.slow = Math.max(enemy.slow, 1.4);
+              }
+            }
             tower.cooldown = def.rate * (level >= 3 && tower.type === 4 ? .68 : 1);
             tower.angle = Math.atan2(target.y - tower.y * TILE - 8, target.x - tower.x * TILE - 8);
           }
@@ -457,10 +476,25 @@
               if (idx >= 0) defeatEnemy(idx, target);
             }
             if (shot.splash) {
-              for (const enemy of state.enemies) {
+              for (let j = state.enemies.length - 1; j >= 0; j--) {
+                const enemy = state.enemies[j];
                 if (enemy !== target && Math.hypot(enemy.x - target.x, enemy.y - target.y) < 23) {
                   enemy.hp -= shot.damage * .55;
-                  if (enemy.hp <= 0) defeatEnemy(state.enemies.indexOf(enemy), enemy);
+                  if (enemy.hp <= 0) defeatEnemy(j, enemy);
+                }
+              }
+              if (shot.chain) {
+                const chained = state.enemies
+                  .filter(enemy => enemy !== target)
+                  .map(enemy => ({ enemy, distance: Math.hypot(enemy.x - target.x, enemy.y - target.y) }))
+                  .filter(candidate => candidate.distance < 54)
+                  .sort((a, b) => a.distance - b.distance)
+                  .slice(0, 2);
+                for (const candidate of chained) {
+                  candidate.enemy.hp -= shot.damage * .62;
+                  particle(candidate.enemy.x, candidate.enemy.y, shot.color, 2);
+                  if (candidate.enemy.hp <= 0)
+                    defeatEnemy(state.enemies.indexOf(candidate.enemy), candidate.enemy);
                 }
               }
             }
@@ -477,6 +511,17 @@
         state.candy += enemy.reward;
         particle(enemy.x, enemy.y, "#ffd567", 6);
         state.enemies.splice(index, 1);
+        if (enemy.kind === "brood") {
+          for (let i = 0; i < 2; i++) {
+            const child = {
+              ...enemy, kind: "seedling", hp: scaleEnemyHp(60, 4, state.day),
+              maxHp: scaleEnemyHp(60, 4, state.day), speed: 39, reward: 3, size: 6,
+              x: enemy.x + (i ? 5 : -5), y: enemy.y, minion: true,
+              bob: Math.random() * Math.PI * 2, flash: 0, slow: 0, poison: 0
+            };
+            state.enemies.push(child);
+          }
+        }
         sfx("kill");
         say(`+${enemy.reward} CANDY CORN`, .8);
       }
@@ -526,7 +571,7 @@
         drawMiniScarecrow(66, 104);
         drawMiniGhost(171, 102, state.titleTime);
         drawMiniBat(185, 87, state.titleTime);
-        text("5 NIGHTS · 5 TOWERS · 1 VERY HUNGRY PARADE", 120, 128, "#f7e9c0", 6, "center");
+        text("10 NIGHTS · 8 TOWERS · 1 VERY HUNGRY PARADE", 120, 128, "#f7e9c0", 6, "center");
         text("PRESS A / ENTER / TAP TO BEGIN", 120, 145 + Math.sin(state.titleTime * 4) * 1.5, "#ffd66b", 7, "center");
         text("♪ ORIGINAL CHIPTUNE ON", 120, 156, "#9db4ca", 5, "center");
       }
@@ -536,7 +581,7 @@
         ctx.fillRect(0, 0, W, HUD);
         ctx.fillStyle = state.phase === "day" ? "#f5b04a" : "#a8c8ed";
         ctx.fillRect(0, HUD - 1, W, 1);
-        text(`${state.phase === "day" ? "☀" : "☾"} DAY ${state.day}/5 ${state.phase === "day" ? "BUILD" : "NIGHT"}`, 4, 8, state.phase === "day" ? "#ffe083" : "#c6ddff", 7);
+        text(`${state.phase === "day" ? "☀" : "☾"} DAY ${state.day}/10 ${state.phase === "day" ? "BUILD" : "NIGHT"}`, 4, 8, state.phase === "day" ? "#ffe083" : "#c6ddff", 7);
         drawCandy(96, 7); text(`${state.candy}`, 105, 8, "#ffe28a", 7);
         drawSeed(140, 7); text(`${state.seeds}`, 149, 8, "#b7ed9f", 7);
         text("PATCH", 180, 8, "#f3dbb7", 6);
@@ -659,12 +704,24 @@
           ctx.fillStyle = "#9ce8e7"; ctx.fillRect(x + 6, y + 3, 5, 6);
           ctx.fillStyle = "#fff3c6"; ctx.fillRect(x + 7, y + 4, 3, 3);
           ctx.fillStyle = "#ffd98c"; ctx.fillRect(x + 5, y + 2, 2, 2); ctx.fillRect(x + 10, y + 1, 2, 2);
-        } else {
+        } else if (type === 4) {
           ctx.fillStyle = "#493952"; ctx.fillRect(x + 4, y + 9, 9, 6); ctx.fillRect(x + 6, y + 5, 5, 5);
           ctx.fillStyle = "#b99add"; ctx.fillRect(x + 6, y + 2, 5, 5);
           ctx.fillStyle = "#312b43"; ctx.fillRect(x + 5, y + 2, 7, 2);
           ctx.fillStyle = "#eee2ff"; ctx.fillRect(x + 7, y + 4, 1, 1); ctx.fillRect(x + 10, y + 4, 1, 1);
           ctx.fillStyle = "#342c40"; ctx.fillRect(x + 3, y + 11, 2, 3); ctx.fillRect(x + 12, y + 11, 2, 3);
+        } else if (type === 5) {
+          ctx.fillStyle = "#47613a"; ctx.fillRect(x + 3, y + 10, 10, 5);
+          ctx.fillStyle = "#8ebd50"; ctx.fillRect(x + 4, y + 4, 3, 8); ctx.fillRect(x + 9, y + 3, 3, 9);
+          ctx.fillStyle = "#d6eb83"; ctx.fillRect(x + 5, y + 2, 2, 3); ctx.fillRect(x + 10, y + 1, 2, 3);
+        } else if (type === 6) {
+          ctx.fillStyle = "#45455f"; ctx.fillRect(x + 4, y + 5, 8, 10);
+          ctx.fillStyle = "#a9b5ed"; ctx.fillRect(x + 3, y + 4, 10, 3); ctx.fillRect(x + 6, y + 2, 4, 2);
+          ctx.fillStyle = "#f4e3a0"; ctx.fillRect(x + 7, y + 8, 2, 4);
+        } else {
+          ctx.fillStyle = "#604d6f"; ctx.fillRect(x + 4, y + 7, 9, 8);
+          ctx.fillStyle = "#efdb86"; ctx.fillRect(x + 6, y + 2, 5, 7); ctx.fillRect(x + 7, y, 3, 2);
+          ctx.fillStyle = "#fff4c7"; ctx.fillRect(x + 8, y + 4, 1, 2);
         }
         if (t.level >= 3) {
           ctx.fillStyle = t.type === 1 ? "#ff8e4a" : "#f7d77f";
@@ -682,6 +739,11 @@
           else if (e.kind === "skeleton") drawSkeleton(x, y + bob);
           else if (e.kind === "trickster") drawTrickster(x, y + bob);
           else if (e.kind === "werewolf") drawWerewolf(x, y + bob);
+          else if (e.kind === "brood") drawBrood(x, y + bob);
+          else if (e.kind === "seedling") drawSeedling(x, y + bob);
+          else if (e.kind === "bramble") drawBramble(x, y + bob);
+          else if (e.kind === "banshee") drawBanshee(x, y + bob);
+          else if (e.kind === "moonmoth") drawMoonmoth(x, y + bob, state.elapsed);
           else drawZombie(x, y + bob);
           if (e.flash > 0) {
             ctx.globalAlpha = .45; ctx.fillStyle = "#fff"; ctx.fillRect(x - 6, y - 9, 12, 12); ctx.globalAlpha = 1;
@@ -817,6 +879,44 @@
         ctx.fillStyle = "#ffda72"; ctx.fillRect(x - 3, y - 5, 2, 2); ctx.fillRect(x + 2, y - 5, 2, 2);
         ctx.fillStyle = "#533d38"; ctx.fillRect(x - 2, y - 1, 4, 2);
         ctx.fillStyle = "#6d4e42"; ctx.fillRect(x - 4, y + 5, 3, 4); ctx.fillRect(x + 2, y + 5, 3, 4);
+      }
+
+      function drawBrood(x, y) {
+        drawPumpkin(x, y + 1, .72, 0);
+        ctx.fillStyle = "#322b30"; ctx.fillRect(x - 3, y - 2, 2, 2); ctx.fillRect(x + 2, y - 2, 2, 2);
+        ctx.fillStyle = "#78a44b"; ctx.fillRect(x - 1, y - 8, 2, 4); ctx.fillRect(x + 1, y - 8, 3, 1);
+      }
+
+      function drawSeedling(x, y) {
+        ctx.fillStyle = "#f4b65b"; ctx.fillRect(x - 4, y - 3, 8, 6);
+        ctx.fillStyle = "#ffda8c"; ctx.fillRect(x - 3, y - 5, 6, 3);
+        ctx.fillStyle = "#52683b"; ctx.fillRect(x - 2, y - 2, 1, 1); ctx.fillRect(x + 2, y - 2, 1, 1);
+        ctx.fillStyle = "#75a64d"; ctx.fillRect(x - 1, y - 7, 2, 2);
+      }
+
+      function drawBramble(x, y) {
+        ctx.fillStyle = "#47543a"; ctx.fillRect(x - 6, y - 2, 12, 9);
+        ctx.fillStyle = "#718d49"; ctx.fillRect(x - 5, y - 8, 10, 8);
+        ctx.fillStyle = "#a8bd63"; ctx.fillRect(x - 7, y - 6, 3, 2); ctx.fillRect(x + 4, y - 5, 3, 2);
+        ctx.fillStyle = "#ffdc75"; ctx.fillRect(x - 3, y - 5, 2, 2); ctx.fillRect(x + 2, y - 5, 2, 2);
+        ctx.fillStyle = "#394332"; ctx.fillRect(x - 5, y + 6, 3, 3); ctx.fillRect(x + 2, y + 6, 3, 3);
+      }
+
+      function drawBanshee(x, y) {
+        ctx.fillStyle = "#b995d8"; ctx.fillRect(x - 5, y - 7, 10, 13);
+        ctx.fillRect(x - 7, y - 2, 4, 5); ctx.fillRect(x + 3, y - 2, 4, 5);
+        ctx.fillStyle = "#f2ddff"; ctx.fillRect(x - 3, y - 9, 6, 3);
+        ctx.fillStyle = "#523c70"; ctx.fillRect(x - 3, y - 4, 2, 2); ctx.fillRect(x + 2, y - 4, 2, 2);
+        ctx.fillStyle = "#ece0ff"; ctx.fillRect(x - 1, y + 1, 3, 3);
+      }
+
+      function drawMoonmoth(x, y, time) {
+        const flap = Math.sin(time * 16 + x) > 0;
+        ctx.fillStyle = "#d8d0ff"; ctx.fillRect(x - 2, y - 2, 4, 6);
+        ctx.fillStyle = "#9c90d2";
+        ctx.fillRect(x - (flap ? 9 : 7), y - (flap ? 6 : 2), 6, 5);
+        ctx.fillRect(x + 2, y - (flap ? 6 : 2), 6, 5);
+        ctx.fillStyle = "#fff2a1"; ctx.fillRect(x - 1, y - 3, 1, 1); ctx.fillRect(x + 1, y - 3, 1, 1);
       }
 
       function drawHorseman(x, y) {
