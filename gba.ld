@@ -22,8 +22,9 @@ SECTIONS
   .text 0x080000C0 :
   {
     KEEP(*(.text.startup))
-    *(.text*)
+    /* Keep ROM constants close to the reset stub for BIOS-skipped emulators. */
     *(.rodata*)
+    *(.text*)
     *(.glue_7*)
     *(.v4_bx*)
   } > ROM

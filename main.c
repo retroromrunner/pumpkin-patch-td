@@ -44,12 +44,13 @@ typedef struct {
 typedef struct {
   int32_t x, y;
   int16_t hp, max_hp, speed;
-  int8_t kind, target, slow, poison;
-  uint8_t reward;
+  int8_t kind, target;
+  uint8_t slow, poison;
+  uint8_t reward, hp_bar_scale, glue_slow;
 } Enemy;
 typedef struct {
   int16_t sx, sy, tx, ty;
-  uint8_t age, color;
+  uint8_t age, color, size;
 } Projectile;
 static const Point route[] = {
   {-1, 2}, {4, 2}, {4, 5}, {9, 5}, {9, 2}, {14, 2}, {14, 7},
@@ -68,6 +69,8 @@ static const uint16_t colors[] = {
   RGB15(15, 8, 13), RGB15(15, 10, 8), RGB15(5, 4, 10), RGB15(23, 18, 10),
   RGB15(18, 25, 12), RGB15(23, 16, 8), RGB15(30, 25, 17), RGB15(31, 20, 5)
 };
+static const uint8_t night_star_x[] = {13, 60, 107, 154, 201, 8, 55, 102};
+static const uint8_t night_star_y[] = {0, 29, 58, 87, 116, 27, 56, 85};
 
 static const uint8_t font[][5] = {
   {2,5,7,5,5},{6,5,6,5,6},{3,4,4,4,3},{6,5,5,5,6},{7,4,6,4,7},
@@ -78,7 +81,8 @@ static const uint8_t font[][5] = {
   {7,1,2,4,7},
   {2,5,5,5,2},{2,6,2,2,7},{6,1,2,4,7},{6,1,3,1,6},{5,5,7,1,1},
   {7,4,6,1,6},{3,4,6,5,2},{7,1,2,2,2},{2,5,2,5,2},{2,5,3,1,6},
-  {0,0,2,0,0},{0,0,0,0,2},{0,0,7,0,0},{1,1,2,4,4},{2,2,2,2,2}
+  {0,0,2,0,0},{0,0,0,0,2},{0,0,7,0,0},{2,2,2,0,2},
+  {0,2,7,2,0},{4,4,2,1,1}
 };
 
 static volatile uint8_t *frame;
@@ -96,9 +100,16 @@ static uint8_t paused, message_timer, message_code;
 static uint8_t message_value;
 static uint8_t message_tower_x, message_tower_y;
 static uint16_t message_cost;
+static uint8_t branch_preview_active, branch_preview;
+static uint8_t branch_preview_x, branch_preview_y;
 static uint16_t tower_hover_timer;
 static uint8_t tower_hover_kind, tower_hover_level, tower_hover_branch;
+static uint16_t monster_hover_timer;
+static uint8_t monster_hover_kind, monster_hover_effects;
+static int16_t monster_hover_hp, monster_hover_max_hp, monster_hover_speed;
 static uint8_t title_note, night_note;
+static uint8_t dawn_note, dawn_music_clock;
+static uint8_t night_star_offset;
 static uint16_t random_seed;
 static uint16_t simulation_frame;
 
@@ -119,6 +130,33 @@ static const uint16_t night_melody[] = {
   440, 392, 349, 330, 294, 330, 392, 294
 };
 static const uint16_t night_bass[] = {147, 174, 196, 220, 147, 165, 196, 233};
+static const uint16_t dawn_melody[] = {523, 659, 784, 1047};
+
+static int tower_damage_value(uint8_t kind, int level, int branch) {
+  int damage = tower_damage[kind] * (100 + (level - 1) * 42) / 100;
+  if (level >= 2 && kind == SCARECROW)
+    damage = branch ? damage * 2 : damage / 2;
+  if (level >= 2 && kind == LANTERN && branch) damage = damage * 3 / 2;
+  if (level >= 2 && kind == BAT_ROOST && branch) damage *= 2;
+  return damage;
+}
+
+static int tower_cooldown_value(uint8_t kind, int level, int branch) {
+  int rate = tower_rate[kind];
+  if (!rate) return 0;
+  if (level >= 2 && kind == SCARECROW)
+    rate = rate * (branch ? 70 : 45) / 100;
+  else rate = rate * (level >= 3 ? 55 : 75) / 100;
+  return rate ? rate : 1;
+}
+
+static int tower_attack_range(uint8_t kind, int level, int branch) {
+  int range;
+  if (level >= 2 && kind == SCARECROW && branch)
+    range = 22 + (level - 2) * 7;
+  else range = tower_range[kind] + (level - 1) * 7;
+  return range * 5 / 4;
+}
 
 static uint32_t rand_next(void) {
   random_seed = (uint16_t)(random_seed * 25173u + 13849u);
@@ -204,6 +242,18 @@ static void play_tone(uint16_t hz, uint8_t duration) {
 
 static void sfx(uint8_t kind) {
   uint16_t hz = 440;
+  if (mode == NIGHT) {
+    uint16_t noise = 0x17;
+    if (kind == 1) noise = 0x1D;
+    else if (kind == 3) noise = 0x1B;
+    else if (kind == 4) noise = 0x19;
+    else if (kind == 5) noise = 0x15;
+    else if (kind == 7) noise = 0x1A;
+    else if (kind == 8) noise = 0x14;
+    REG_SND4CNT_L = 0xF53C;
+    REG_SND4CNT_H = (uint16_t)(0xC000 | noise);
+    return;
+  }
   if (kind == 0) {
     uint16_t high = (uint16_t)(2048u - 131072u / 740u);
     uint16_t low = (uint16_t)(2048u - 131072u / 554u);
@@ -246,8 +296,31 @@ static void sfx(uint8_t kind) {
 }
 
 static void music_update(void) {
+  if (mode == NIGHT && paused) return;
+  if (dawn_note < 4) {
+    if (++dawn_music_clock >= 3) {
+      play_tone(dawn_melody[dawn_note++], 18);
+      dawn_music_clock = 0;
+      if (dawn_note == 4) {
+        REG_SND2CNT_L = 0xF0E0;
+        REG_SND2CNT_H = (uint16_t)(0xC000 | (2048u - 131072u / 659u));
+      }
+    }
+    return;
+  }
+  if (dawn_note == 4) {
+    if (++dawn_music_clock >= 6) {
+      REG_SND1CNT_X = 0;
+      REG_SND1CNT_H = 0x0080;
+      REG_SND2CNT_L = 0x0080;
+      REG_SND2CNT_H = 0;
+      dawn_note = 5;
+      dawn_music_clock = 0;
+    }
+    return;
+  }
   if (mode != TITLE && mode != NIGHT) return;
-  if (++music_clock < (mode == TITLE ? 4 : 8)) return;
+  if (++music_clock < 4) return;
   music_clock = 0;
   if (mode == TITLE) {
     uint16_t hz = melody[title_note++ & 31];
@@ -274,6 +347,13 @@ static void stop_music(void) {
   REG_SND2CNT_L = 0x0080;
   REG_SND2CNT_H = 0;
   music_clock = 0;
+  dawn_note = 5;
+  dawn_music_clock = 0;
+}
+
+static void play_dawn_music(void) {
+  stop_music();
+  dawn_note = 0;
 }
 
 static void update_projectiles(void) {
@@ -283,14 +363,15 @@ static void update_projectiles(void) {
     else projectiles[i].age = 0;
 }
 
-static void spawn_projectile(int sx, int sy, int tx, int ty, uint8_t color) {
+static void spawn_projectile(int sx, int sy, int tx, int ty, uint8_t color,
+  uint8_t size) {
   int i;
   for (i = 0; i < MAX_PROJECTILES; i++) {
     Projectile *p = &projectiles[i];
     if (p->age) continue;
     p->sx = (int16_t)sx; p->sy = (int16_t)sy;
     p->tx = (int16_t)tx; p->ty = (int16_t)ty;
-    p->age = 1; p->color = color;
+    p->age = 1; p->color = color; p->size = size;
     return;
   }
 }
@@ -360,13 +441,17 @@ static void place_or_upgrade(void) {
     if (t->level >= 3) { set_message(1, 0); return; }
     if (candy < price) { set_message(2, (uint8_t)price); return; }
     if (seeds < seed_price) { set_message(15, seed_price); return; }
+    if (t->level == 1 && branch_preview_active &&
+        branch_preview_x == cursor_x && branch_preview_y == cursor_y)
+      t->branch = branch_preview;
+    branch_preview_active = 0;
     candy -= price; seeds -= seed_price; t->level++;
-    if (t->level == 3) {
+    if (t->level == 2) {
       sfx(5);
       set_message(14, (uint8_t)t->branch);
     }
     else sfx(0);
-    if (t->level < 3) set_message(3, t->level);
+    if (t->level == 3) set_message(3, t->level);
     return;
   }
   if (tower_count >= MAX_TOWERS || route_map[cursor_x][cursor_y]) { set_message(4, 0); return; }
@@ -391,6 +476,7 @@ static void sell_tower(void) {
       int j;
       candy += refund;
       for (j = i; j + 1 < tower_count; j++) towers[j] = towers[j + 1];
+      branch_preview_active = 0;
       tower_count--; sfx(2); set_message(6, (uint8_t)refund); return;
     }
   }
@@ -400,11 +486,14 @@ static void sell_tower(void) {
 static void start_night(void) {
   int i;
   if (mode != DAY) return;
+  dawn_note = 5;
+  dawn_music_clock = 0;
   mode = NIGHT; paused = 0; enemy_count = 0;
   wave_clear_clock = 0;
   music_clock = 0;
   night_note = 0;
   tower_hover_timer = 0;
+  branch_preview_active = 0;
   spawn_left = (uint8_t)(7 + day * 2 + (day == 5));
   spawn_clock = 30;
   for (i = 0; i < tower_count; i++) towers[i].cooldown = 2;
@@ -418,13 +507,13 @@ static void spawn_enemy(void) {
   roll = (uint8_t)(rand_next() >> 8);
   e = &enemies[enemy_count++];
   e->x = -8 * 256; e->y = 2 * TILE * 256 + 8 * 256;
-  e->target = 1; e->slow = 0; e->poison = 0;
+  e->target = 1; e->slow = 0; e->poison = 0; e->glue_slow = 0;
   if (day == 5 && spawn_left == 1) {
     e->kind = HORSEMAN; e->hp = 450; e->speed = 125; e->reward = 45;
   } else if (day >= 3 && roll < 48) {
     e->kind = GHOST; e->hp = (int16_t)(32 + day * 9); e->speed = 220; e->reward = 9;
   } else if (day >= 2 && roll < 98) {
-    e->kind = SKELETON; e->hp = (int16_t)(28 + day * 8); e->speed = 285; e->reward = 8;
+    e->kind = SKELETON; e->hp = (int16_t)(24 + day * 6); e->speed = 285; e->reward = 8;
   } else if (day >= 3 && roll < 147) {
     e->kind = WEREWOLF; e->hp = (int16_t)(95 + day * 18); e->speed = 175; e->reward = 17;
   } else if (roll < 190) {
@@ -433,6 +522,7 @@ static void spawn_enemy(void) {
     e->kind = ZOMBIE; e->hp = (int16_t)(30 + day * 8); e->speed = 130; e->reward = 11;
   }
   e->max_hp = e->hp;
+  e->hp_bar_scale = (uint8_t)(3584u / (uint16_t)e->max_hp);
   spawn_left--;
 }
 
@@ -467,7 +557,8 @@ static void update_enemies(void) {
     p = route[(uint8_t)e->target];
     tx = (int32_t)(p.x * TILE + 8) * 256;
     ty = (int32_t)(p.y * TILE + 8) * 256;
-    step = e->slow ? e->speed * 3 / 2 : e->speed * 3;
+    step = e->glue_slow ? e->speed / 2 :
+      e->slow ? e->speed * 3 / 4 : e->speed * 3;
     if (e->x != tx) {
       if (e->x < tx) { e->x += step; if (e->x >= tx) e->x = tx; }
       else { e->x -= step; if (e->x <= tx) e->x = tx; }
@@ -475,12 +566,35 @@ static void update_enemies(void) {
       if (e->y < ty) { e->y += step; if (e->y >= ty) e->y = ty; }
       else { e->y -= step; if (e->y <= ty) e->y = ty; }
     } else e->target++;
-    if (e->slow) e->slow--;
+    if (e->slow && !--e->slow) e->glue_slow = 0;
     if (e->poison) {
       e->poison--;
       if ((simulation_frame & 7) == 0) enemy_damage(i, 2);
       if (i >= enemy_count) break;
     }
+  }
+}
+
+static void update_monster_hover(void) {
+  int i;
+  int left = cursor_x * TILE, top = cursor_y * TILE;
+  if (mode != NIGHT) {
+    monster_hover_timer = 0;
+    return;
+  }
+  for (i = 0; i < enemy_count; i++) {
+    Enemy *e = &enemies[i];
+    int x = e->x / 256, y = e->y / 256;
+    if (x < left || x >= left + TILE || y < top || y >= top + TILE)
+      continue;
+    monster_hover_kind = (uint8_t)e->kind;
+    monster_hover_hp = e->hp;
+    monster_hover_max_hp = e->max_hp;
+    monster_hover_speed = e->speed;
+    monster_hover_effects = (uint8_t)((e->glue_slow ? 1 : e->slow ? 2 : 0) |
+      (e->poison ? 4 : 0));
+    monster_hover_timer = 180;
+    return;
   }
 }
 
@@ -492,8 +606,7 @@ static void update_towers(void) {
     Tower *t = &towers[i];
     int target = -1, best = -99999;
     int tx = t->x * TILE + 8, ty = t->y * TILE + 8;
-    int range = tower_range[(uint8_t)t->kind] + (t->level - 1) * 7;
-    if (t->kind == SCARECROW && t->level >= 3 && t->branch == 1) range = 22;
+    int range = tower_attack_range((uint8_t)t->kind, t->level, t->branch);
     if (t->cooldown) { t->cooldown--; continue; }
     if (t->kind == MOONFLOWER) continue;
     for (j = 0; j < enemy_count; j++) {
@@ -504,49 +617,72 @@ static void update_towers(void) {
       if (dx + dy <= range && progress > best) { target = j; best = progress; }
     }
     if (target >= 0) {
-      int damage = tower_damage[(uint8_t)t->kind] * (100 + (t->level - 1) * 42) / 100;
+      int damage = tower_damage_value((uint8_t)t->kind, t->level, t->branch);
       int target_x = enemies[target].x / 256, target_y = enemies[target].y / 256;
-      uint8_t shot_color = t->kind == CAULDRON ? 15 :
+      uint8_t shot_color, shot_size = t->level >= 3 ? 5 : t->level == 2 ? 4 : 3;
+      if (t->level >= 2 && t->kind == SCARECROW)
+        shot_color = t->branch ? 31 : 22;
+      else if (t->level >= 2 && t->kind == LANTERN)
+        shot_color = t->branch ? 12 : 17;
+      else if (t->level >= 2 && t->kind == CAULDRON)
+        shot_color = t->branch ? 19 : 15;
+      else if (t->level >= 2 && t->kind == BAT_ROOST)
+        shot_color = t->branch ? 14 : 31;
+      else if (t->level >= 2) shot_color = 19;
+      else shot_color = t->kind == CAULDRON ? 15 :
         t->kind == LANTERN ? 13 : t->kind == BAT_ROOST ? 12 : 18;
-      spawn_projectile(tx, ty, target_x, target_y, shot_color);
+      spawn_projectile(tx, ty, target_x, target_y, shot_color, shot_size);
       if (t->kind == CAULDRON) {
-        enemies[target].slow = (uint8_t)(t->level >= 3 && t->branch == 0 ? 100 : 48);
+        if (t->level >= 2 && t->branch == 0) {
+          enemies[target].slow = 240;
+          enemies[target].glue_slow = 1;
+        } else if (enemies[target].slow < 120) {
+          enemies[target].slow = 120;
+        }
         if (t->level >= 2) enemies[target].poison = 72;
       }
       if (t->kind == LANTERN && t->level >= 2) enemies[target].poison = 60;
-      if (t->kind == BAT_ROOST && t->level >= 3 && t->branch == 1) damage *= 2;
-      if (t->kind == LANTERN && t->level >= 3 && t->branch == 1) damage = damage * 3 / 2;
-      if (t->kind == SCARECROW && t->level >= 3 && t->branch == 1) damage *= 2;
-      if (t->kind == SCARECROW && t->level >= 3 && t->branch == 0) {
-        int k;
-        for (k = enemy_count - 1; k >= 0; k--) {
-          int dx = abs_i(enemies[k].x / 256 - target_x);
-          int dy = abs_i(enemies[k].y / 256 - target_y);
-          if (dx + dy < 22) enemy_damage(k, damage / 2);
-        }
-      } else enemy_damage(target, damage);
-      if (t->kind == LANTERN && t->level >= 3 && t->branch == 0) {
-        int k;
-        for (k = enemy_count - 1; k >= 0; k--) {
-          if (abs_i(enemies[k].x / 256 - target_x) + abs_i(enemies[k].y / 256 - target_y) < 20)
-            enemy_damage(k, damage / 2);
-        }
-      }
-      if (t->kind == CAULDRON && t->level >= 3 && t->branch == 1) {
+      if (t->kind == CAULDRON && t->level >= 2 && t->branch == 1) {
         int k;
         for (k = 0; k < enemy_count; k++) {
           if (abs_i(enemies[k].x / 256 - target_x) + abs_i(enemies[k].y / 256 - target_y) < 22)
             enemies[k].poison = 60;
         }
       }
-      if (t->kind == BAT_ROOST && t->level >= 3 && t->branch == 0) {
+      if (t->level >= 2 && t->kind == SCARECROW && t->branch == 0) {
         int k;
         for (k = enemy_count - 1; k >= 0; k--) {
-          if (abs_i(enemies[k].x / 256 - target_x) + abs_i(enemies[k].y / 256 - target_y) < 18)
-            enemy_damage(k, damage / 2);
+          int dx = abs_i(enemies[k].x / 256 - target_x);
+          int dy = abs_i(enemies[k].y / 256 - target_y);
+          if (k == target || dx + dy < 22) enemy_damage(k, damage);
+        }
+      } else if (t->level >= 2 && t->kind == LANTERN && t->branch == 0) {
+        int k;
+        for (k = enemy_count - 1; k >= 0; k--) {
+          int dx = abs_i(enemies[k].x / 256 - target_x);
+          int dy = abs_i(enemies[k].y / 256 - target_y);
+          if (k == target) enemy_damage(k, damage);
+          else if (dx + dy < 20) enemy_damage(k, damage / 2);
+        }
+      } else if (t->level >= 2 && t->kind == BAT_ROOST && t->branch == 0) {
+        int k;
+        for (k = enemy_count - 1; k >= 0; k--) {
+          int dx = abs_i(enemies[k].x / 256 - target_x);
+          int dy = abs_i(enemies[k].y / 256 - target_y);
+          if (k == target) enemy_damage(k, damage);
+          else if (dx + dy < 18) enemy_damage(k, damage / 2);
+        }
+      } else enemy_damage(target, damage);
+      if (t->kind == LANTERN && t->level >= 2 && t->branch == 0) {
+        int k;
+        for (k = enemy_count - 1; k >= 0; k--) {
+          if (abs_i(enemies[k].x / 256 - target_x) +
+              abs_i(enemies[k].y / 256 - target_y) < 20)
+            enemies[k].poison = 60;
         }
       }
-      t->cooldown = (uint16_t)(tower_rate[(uint8_t)t->kind] * (t->level >= 3 ? 55 : 75) / 100);
+      t->cooldown = (uint16_t)tower_cooldown_value((uint8_t)t->kind,
+        t->level, t->branch);
     }
   }
   for (i = 0; i < tower_count; i++) {
@@ -555,20 +691,24 @@ static void update_towers(void) {
     for (j = 0; j < tower_count; j++) {
       Tower *t = &towers[j];
       if (t == a || t->kind == MOONFLOWER) continue;
-      if (abs_i(t->x - a->x) + abs_i(t->y - a->y) <= 3 + a->level) {
-        uint8_t boost = a->level >= 3 && a->branch == 1 ? 3 : 1;
+      if (abs_i(t->x - a->x) + abs_i(t->y - a->y) <= 4 + a->level) {
+        uint8_t boost = a->level >= 2 && a->branch == 1 ? 3 : 1;
         if (t->cooldown > boost) t->cooldown -= boost;
       }
     }
-    if (a->level >= 3 && a->branch == 0) {
+    if (a->level >= 2 && a->branch == 0) {
       for (j = 0; j < enemy_count; j++) {
         int dx = abs_i(enemies[j].x / 256 - a->x * TILE - 8);
         int dy = abs_i(enemies[j].y / 256 - a->y * TILE - 8);
-        if (enemies[j].kind != HORSEMAN && dx + dy < 28) enemies[j].slow = 30;
+        if (enemies[j].kind != HORSEMAN && dx + dy < 35 &&
+            enemies[j].slow < 30)
+          enemies[j].slow = 30;
       }
     }
   }
 }
+
+static void update_camera(void);
 
 static void update_game(void) {
   if (mode != NIGHT || paused) return;
@@ -589,7 +729,20 @@ static void update_game(void) {
         stop_music();
         mode = DAY; day++; seeds += (uint8_t)((pumpkins + 2) / 3);
         candy += (uint16_t)(25 + pumpkins * 5);
+        tower_hover_timer = 0;
+        if (tower_count) {
+          int first = 0, i;
+          for (i = 1; i < tower_count; i++)
+            if (towers[i].y < towers[first].y ||
+                (towers[i].y == towers[first].y &&
+                 towers[i].x < towers[first].x))
+              first = i;
+          cursor_x = (uint16_t)towers[first].x;
+          cursor_y = (uint16_t)towers[first].y;
+          update_camera();
+        }
         set_message(11, pumpkins);
+        play_dawn_music();
       }
     }
   } else wave_clear_clock = 0;
@@ -611,6 +764,7 @@ static void new_game(void) {
   stop_music();
   mode = DAY; day = 1; candy = 150; seeds = 0; pumpkins = 8;
   selected = 0;
+  branch_preview_active = 0;
   tower_count = enemy_count = 0; camera_x = camera_y = 0;
   for (i = 0; i < MAX_PROJECTILES; i++) projectiles[i].age = 0;
   cursor_x = 2; cursor_y = 3; paused = 0; wave_clear_clock = 0;
@@ -639,6 +793,8 @@ static void key_update(void) {
       (message_code == 3 || message_code == 13 || message_code == 14) &&
       (cursor_x != message_tower_x || cursor_y != message_tower_y))
     message_timer = 0;
+  if (cursor_x != previous_x || cursor_y != previous_y)
+    branch_preview_active = 0;
   if (mode == NIGHT && (cursor_x != previous_x || cursor_y != previous_y)) {
     Tower *hovered = tower_at(cursor_x, cursor_y);
     if (hovered) {
@@ -646,23 +802,45 @@ static void key_update(void) {
       tower_hover_level = (uint8_t)hovered->level;
       tower_hover_branch = (uint8_t)hovered->branch;
       tower_hover_timer = 180;
-    }
+    } else tower_hover_timer = 0;
   }
-  if (pressed & KEY_A) {
+  if ((pressed & KEY_A) && !(pressed & KEY_SELECT)) {
     if (mode == TITLE || mode == WIN || mode == LOSE) new_game();
     else place_or_upgrade();
   }
   if (pressed & KEY_B) sell_tower();
   if (pressed & KEY_SELECT) {
     Tower *t = tower_at(cursor_x, cursor_y);
-    if (t) { t->branch ^= 1; set_message(13, t->branch); }
-    else selected = (uint8_t)((selected + 1) % 5);
-    sfx(8);
+    if (!t) {
+      selected = (uint8_t)((selected + 1) % 5);
+      sfx(8);
+    } else if (mode == DAY && t->level < 3) {
+      if (t->level == 1) {
+        if (!branch_preview_active || branch_preview_x != cursor_x ||
+            branch_preview_y != cursor_y)
+          branch_preview = t->branch;
+        branch_preview ^= 1;
+        branch_preview_x = (uint8_t)cursor_x;
+        branch_preview_y = (uint8_t)cursor_y;
+        branch_preview_active = 1;
+      } else {
+        branch_preview_active = 0;
+      }
+      set_message(13, branch_preview);
+      sfx(8);
+    } else if (mode == DAY) {
+      set_message(1, 0);
+      sfx(8);
+    }
   }
   if (pressed & KEY_START) {
     if (mode == TITLE || mode == WIN || mode == LOSE) new_game();
     else if (mode == DAY) start_night();
-    else if (mode == NIGHT) paused ^= 1;
+    else if (mode == NIGHT) {
+      paused ^= 1;
+      if (paused) stop_music();
+      else music_clock = 3;
+    }
   }
   old_keys = keys;
 }
@@ -676,75 +854,153 @@ static void draw_tile(int x, int y, int mx, int my) {
     rect(x, y, TILE, 2, mode == DAY ? 18 : 24);
     rect(x, y + TILE - 2, TILE, 2, mode == DAY ? 20 : 23);
     rect(x + ((mx * 3) & 8), y + 7, 3, 1, mode == DAY ? 20 : 23);
-  } else if (mode == DAY && detail % 19 == 3) {
-    int leaf_x = x + 3 + (int)(detail % 9);
+  } else if (mode == DAY && (detail & 15u) == 3) {
+    int leaf_x = x + 3 + (int)(detail & 7u);
     int leaf_y = y + 4 + (int)((detail >> 3) % 8);
     rect(leaf_x, leaf_y, 3, 2, 17);
     rect(leaf_x + 2, leaf_y + 1, 2, 1, 18);
-  } else if (mode == DAY && detail % 29 == 7) {
+  } else if (mode == DAY && (detail & 31u) == 7) {
     rect(x + 6, y + 5, 2, 3, 28);
     rect(x + 4, y + 7, 6, 2, 18);
     rect(x + 5, y + 9, 4, 2, 17);
-  } else if (mode == NIGHT && detail % 17 == 5) {
-    int glow_x = x + 4 + (int)(detail % 9);
+  } else if (mode == NIGHT && (detail & 15u) == 5) {
+    int glow_x = x + 4 + (int)(detail & 7u);
     int glow_y = y + 4 + (int)((detail >> 2) % 8);
     rect(glow_x, glow_y, 2, 2, 15);
     set_pixel(glow_x, glow_y, 13);
-  } else if (detail % 7 == 2) {
+  } else if ((detail & 7u) == 2) {
     rect(x + ((mx * 7) & 12), y + ((my * 5) & 12), 2, 1, mode == DAY ? 8 : 3);
   }
 }
 
+static uint8_t tower_palette_color(const Tower *t, uint8_t color);
+static void tower_rect(const Tower *t, int x, int y, int w, int h,
+  uint8_t color);
+
 static void draw_tower(Tower *t) {
-  int x = (t->x - camera_x) * TILE, y = 24 + (t->y - camera_y) * TILE;
+  int x, y;
   int k = t->kind;
-  uint8_t trim = 0;
-  rect(x + 3, y + 14, 10, 2, mode == DAY ? 20 : 0);
+  if (t->x < camera_x || t->x >= camera_x + 15 ||
+      t->y < camera_y || t->y >= camera_y + 8) return;
+  x = (t->x - camera_x) * TILE;
+  y = 24 + (t->y - camera_y) * TILE;
+  tower_rect(t, x + 3, y + 14, 10, 2, mode == DAY ? 20 : 0);
   if (k == SCARECROW) {
-    rect(x + 7, y + 6, 3, 10, 20); rect(x + 4, y + 3, 9, 8, 18);
-    rect(x + 5, y + 2, 7, 6, 13); rect(x + 6, y + 4, 1, 1, 20);
-    rect(x + 10, y + 4, 1, 1, 20); rect(x + 4, y + 11, 9, 2, 21);
-    rect(x + 11, y + 5, 3, 2, 13);
-    rect(x + 4, y + 2, 9, 1, 17);
-  } else if (k == LANTERN) {
-    draw_pumpkin(x + 8, y + 9, 0); rect(x + 6, y + 6, 2, 2, 13);
-    rect(x + 9, y + 6, 2, 2, 13); rect(x + 7, y + 9, 3, 1, 13);
-    rect(x + 7, y + 13, 3, 3, 20);
-  } else if (k == CAULDRON) {
-    rect(x + 4, y + 6, 9, 9, 25); rect(x + 3, y + 5, 11, 3, 19);
-    rect(x + 6, y + 8, 5, 4, 15); rect(x + 7, y + 8, 2, 1, 13);
-    rect(x + 7, y + 3, 2, 2, 15);
-  } else if (k == MOONFLOWER) {
-    rect(x + 7, y + 8, 2, 8, 15); rect(x + 4, y + 10, 3, 5, 16);
-    rect(x + 9, y + 10, 4, 5, 16); rect(x + 6, y + 3, 5, 6, 12);
-    rect(x + 7, y + 4, 3, 3, 13); rect(x + 5, y + 2, 2, 2, 18);
-    rect(x + 10, y + 1, 2, 2, 18);
-  } else {
-    rect(x + 4, y + 9, 9, 6, 26); rect(x + 6, y + 5, 5, 5, 26);
-    rect(x + 6, y + 2, 5, 5, 19); rect(x + 5, y + 2, 7, 2, 20);
-    rect(x + 7, y + 4, 1, 1, 13); rect(x + 10, y + 4, 1, 1, 13);
-    rect(x + 3, y + 11, 2, 3, 20); rect(x + 12, y + 11, 2, 3, 20);
-  }
-  if (t->level > 1) {
-    trim = t->level > 2 ? (t->branch ? 31 : 22) : 25;
-    outline(x + 2, y + 1, 12, 15, trim);
-    rect(x + 5, y + 1, 2, 2, t->level > 2 ? trim : 13);
-  }
-  if (t->level > 2) {
-    if (k == SCARECROW && t->branch) {
-      rect(x + 4, y, 8, 2, 31);
-      rect(x + 3, y + 1, 10, 1, 29);
-      rect(x + 2, y + 7, 2, 2, 31);
-      rect(x + 12, y + 7, 2, 2, 31);
-    } else if (k == SCARECROW) {
-      rect(x + 2, y + 6, 3, 2, 22);
-      rect(x + 11, y + 6, 3, 2, 22);
-      rect(x + 5, y + 1, 6, 2, 22);
+    if (t->level >= 2 && t->branch == 0) {
+      tower_rect(t, x + 7, y + 6, 3, 10, 20);
+      tower_rect(t, x + 5, y + 4, 7, 9, 22);
+      tower_rect(t, x + 5, y + 1, 7, 6, 26);
+      tower_rect(t, x + 1, y + 5, 5, 3, 22);
+      tower_rect(t, x + 11, y + 5, 5, 3, 22);
+      tower_rect(t, x + 11, y + 3, 4, 1, 31);
+      tower_rect(t, x + 6, y + 3, 1, 1, 13);
+      tower_rect(t, x + 10, y + 3, 1, 1, 13);
+    } else if (t->level >= 2) {
+      tower_rect(t, x + 7, y + 5, 3, 11, 20);
+      tower_rect(t, x + 4, y + 6, 9, 8, 29);
+      tower_rect(t, x + 5, y + 2, 7, 6, 18);
+      tower_rect(t, x + 2, y + 2, 12, 2, 31);
+      tower_rect(t, x + 4, y + 1, 8, 1, 31);
+      tower_rect(t, x + 5, y + 7, 2, 2, 20);
+      tower_rect(t, x + 10, y + 7, 2, 2, 20);
+      tower_rect(t, x + 2, y + 9, 4, 2, 31);
+      tower_rect(t, x + 11, y + 9, 4, 2, 31);
     } else {
-      rect(x + 9, y + 1, 2, 2, trim);
-      rect(x + 2, y + 3, 2, 2, trim);
+      tower_rect(t, x + 7, y + 6, 3, 10, 20);
+      tower_rect(t, x + 4, y + 3, 9, 8, 18);
+      tower_rect(t, x + 5, y + 2, 7, 6, 13);
+      tower_rect(t, x + 6, y + 4, 1, 1, 20);
+      tower_rect(t, x + 10, y + 4, 1, 1, 20);
+      tower_rect(t, x + 4, y + 11, 9, 2, 21);
+      tower_rect(t, x + 11, y + 5, 3, 2, 13);
+      tower_rect(t, x + 4, y + 2, 9, 1, 17);
+    }
+  } else if (k == LANTERN) {
+    tower_rect(t, x + 5, y + 7, 7, 6, 18);
+    tower_rect(t, x + 6, y + 6, 5, 8, 17);
+    tower_rect(t, x + 7, y + 5, 3, 9, 31);
+    tower_rect(t, x + 6, y + 6, 2, 2, 13);
+    tower_rect(t, x + 9, y + 6, 2, 2, 13);
+    tower_rect(t, x + 7, y + 9, 3, 1, 13);
+    tower_rect(t, x + 7, y + 13, 3, 3, 20);
+    if (t->level >= 2 && t->branch == 0) {
+      tower_rect(t, x + 5, y + 3, 2, 3, 14);
+      tower_rect(t, x + 8, y + 1, 2, 4, 17);
+      tower_rect(t, x + 11, y + 3, 2, 3, 14);
+    } else if (t->level >= 2) {
+      tower_rect(t, x + 4, y + 4, 2, 2, 12);
+      tower_rect(t, x + 11, y + 2, 2, 2, 12);
+      tower_rect(t, x + 13, y + 5, 2, 2, 12);
+    }
+  } else if (k == CAULDRON) {
+    tower_rect(t, x + 4, y + 6, 9, 9, 25);
+    tower_rect(t, x + 3, y + 5, 11, 3, 19);
+    tower_rect(t, x + 6, y + 8, 5, 4, 15);
+    tower_rect(t, x + 7, y + 8, 2, 1, 13);
+    tower_rect(t, x + 7, y + 3, 2, 2, 15);
+    if (t->level >= 2 && t->branch == 0) {
+      tower_rect(t, x + 4, y + 2, 2, 2, 31);
+      tower_rect(t, x + 12, y + 2, 2, 2, 31);
+    } else if (t->level >= 2) {
+      tower_rect(t, x + 2, y + 2, 2, 3, 22);
+      tower_rect(t, x + 12, y + 1, 2, 3, 22);
+      tower_rect(t, x + 7, y + 1, 2, 2, 23);
+    }
+  } else if (k == MOONFLOWER) {
+    tower_rect(t, x + 7, y + 8, 2, 8, 15);
+    tower_rect(t, x + 4, y + 10, 3, 5, 16);
+    tower_rect(t, x + 9, y + 10, 4, 5, 16);
+    tower_rect(t, x + 6, y + 3, 5, 6, 12);
+    tower_rect(t, x + 7, y + 4, 3, 3, 13);
+    tower_rect(t, x + 5, y + 2, 2, 2, 18);
+    tower_rect(t, x + 10, y + 1, 2, 2, 18);
+    if (t->level >= 2) {
+      tower_rect(t, x + 2, y + 4, 3, 2, 18);
+      tower_rect(t, x + 12, y + 5, 3, 2, 18);
+      tower_rect(t, x + 7, y, 2, 2, 18);
+    }
+  } else {
+    tower_rect(t, x + 4, y + 9, 9, 6, 26);
+    tower_rect(t, x + 6, y + 5, 5, 5, 26);
+    tower_rect(t, x + 6, y + 2, 5, 5, 19);
+    tower_rect(t, x + 5, y + 2, 7, 2, 20);
+    tower_rect(t, x + 7, y + 4, 1, 1, 13);
+    tower_rect(t, x + 10, y + 4, 1, 1, 13);
+    tower_rect(t, x + 3, y + 11, 2, 3, 20);
+    tower_rect(t, x + 12, y + 11, 2, 3, 20);
+    if (t->level >= 2 && t->branch == 0) {
+      tower_rect(t, x + 1, y + 8, 4, 2, 22);
+      tower_rect(t, x + 12, y + 8, 4, 2, 22);
+    } else if (t->level >= 2) {
+      tower_rect(t, x + 5, y, 2, 3, 14);
+      tower_rect(t, x + 10, y, 2, 3, 14);
     }
   }
+  if (t->level >= 3)
+    tower_rect(t, x + 7, y, 3, 2, 30);
+}
+
+static uint8_t tower_palette_color(const Tower *t, uint8_t color) {
+  static const uint8_t accent[5][2] = {
+    {22, 31}, {14, 12}, {31, 22}, {19, 12}, {22, 14}
+  };
+  static const uint8_t light[5][2] = {
+    {23, 30}, {17, 13}, {30, 23}, {14, 18}, {23, 18}
+  };
+  static const uint8_t foliage[5][2] = {
+    {22, 29}, {14, 12}, {31, 22}, {19, 12}, {22, 14}
+  };
+  if (t->level < 2) return color;
+  if (color == 13 || color == 18 || color == 30) return light[(uint8_t)t->kind][t->branch];
+  if (color == 12 || color == 17 || color == 31) return accent[(uint8_t)t->kind][t->branch];
+  if (color == 15 || color == 16 || color == 28) return foliage[(uint8_t)t->kind][t->branch];
+  if (color == 19 || color == 22 || color == 23) return accent[(uint8_t)t->kind][t->branch];
+  return color;
+}
+
+static void tower_rect(const Tower *t, int x, int y, int w, int h,
+  uint8_t color) {
+  rect(x, y, w, h, tower_palette_color(t, color));
 }
 
 static void draw_enemy(Enemy *e) {
@@ -785,9 +1041,9 @@ static void draw_enemy(Enemy *e) {
     rect(x + 2, y - 5, 2, 2, 18); rect(x - 2, y - 1, 4, 1, 20);
     rect(x - 4, y + 5, 3, 3, 25); rect(x + 2, y + 5, 3, 3, 25);
   }
-  rect(x - 7, y - 14, 14, 2, 20);
-  {
-    int health = 14 * e->hp / e->max_hp;
+  if (e->hp < e->max_hp) {
+    rect(x - 7, y - 14, 14, 2, 20);
+    int health = ((uint16_t)e->hp * e->hp_bar_scale) >> 8;
     if (health < 1) health = 1;
     rect(x - 7, y - 14, health, 1, e->hp * 2 < e->max_hp ? 14 : 15);
   }
@@ -805,8 +1061,8 @@ static void draw_projectiles(void) {
     tail_y = 24 + p->sy + (p->ty - p->sy) * (p->age - 1) / PROJECTILE_FRAMES - camera_y * TILE;
     set_pixel(tail_x, tail_y, p->color);
     set_pixel(x, y, p->color);
-    rect(x - 1, y - 1, 3, 3, p->color);
-    set_pixel(x, y, 13);
+    rect(x - p->size / 2, y - p->size / 2, p->size, p->size, p->color);
+    if (p->size <= 3) set_pixel(x, y, 13);
   }
 }
 
@@ -876,15 +1132,13 @@ static void draw_hud(void) {
   }
 }
 
-static int tower_speed(int kind, int level) {
-  int rate = tower_rate[kind];
-  if (!rate) return 0;
-  rate = rate * (level >= 3 ? 55 : 75) / 100;
-  return 120 / (rate ? rate : 1);
+static int tower_speed(int kind, int level, int branch) {
+  int cooldown = tower_cooldown_value((uint8_t)kind, level, branch);
+  return cooldown ? 120 / cooldown : 0;
 }
 
 static const char *tower_name(uint8_t kind, int level, int branch) {
-  if (level >= 3) {
+  if (level >= 2) {
     if (kind == SCARECROW) return branch ? "STRAW SENTINEL" : "CROW CALLER";
     if (kind == LANTERN) return branch ? "WILL O WISP" : "INFERNO JACK";
     if (kind == CAULDRON) return branch ? "HEX POT" : "CANDY GLUE";
@@ -910,22 +1164,20 @@ static void draw_number(int value, int x, int y, uint8_t color) {
 }
 
 static const char *tower_effect(uint8_t kind, int level, int branch) {
-  if (kind == LANTERN) return level >= 2 ? "poison" : "burn";
-  if (kind == CAULDRON) return level >= 2 ? "poison" : "slow";
-  if (kind == MOONFLOWER) return level >= 3 && branch ? "fear" : "buff";
-  if (kind == BAT_ROOST) return level >= 3 ? (branch ? "drain" : "swarm") : "swarm";
-  if (kind == SCARECROW && level >= 3) return branch ? "swat" : "flock";
+  if (kind == LANTERN) return level >= 2 ? (branch ? "poison" : "splash") : "burn";
+  if (kind == CAULDRON) return level >= 2 ? (branch ? "hex" : "glue") : "slow";
+  if (kind == MOONFLOWER)
+    return level >= 2 ? (branch ? "buff" : "fear") : "buff";
+  if (kind == BAT_ROOST) return level >= 2 ? (branch ? "power" : "swarm") : "swarm";
+  if (kind == SCARECROW && level >= 2) return branch ? "swat" : "flock";
   return "-";
 }
 
 static void draw_tower_stats_at(uint8_t kind, int level, int branch, int x, int y, uint8_t color) {
   char stats[24] = "D";
-  int damage = tower_damage[kind] * (100 + (level - 1) * 42) / 100;
-  int speed = tower_speed(kind, level), pos = 1;
+  int damage = tower_damage_value(kind, level, branch);
+  int speed = tower_speed(kind, level, branch), pos = 1;
   const char *effect;
-  if (level >= 3 && kind == SCARECROW && branch) damage *= 2;
-  if (level >= 3 && kind == LANTERN && branch) damage = damage * 3 / 2;
-  if (level >= 3 && kind == BAT_ROOST && branch) damage *= 2;
   effect = tower_effect(kind, level, branch);
   if (damage >= 10) stats[pos++] = (char)('0' + damage / 10);
   stats[pos++] = (char)('0' + damage % 10);
@@ -941,6 +1193,54 @@ static void draw_tower_info(uint8_t kind, int level, int branch, int x, int y, u
   const char *name = tower_name(kind, level, branch);
   text(name, x, y, color, 1);
   draw_tower_stats_at(kind, level, branch, x + length(name) * 5 + 5, y, color);
+}
+
+static const char *monster_name(uint8_t kind) {
+  if (kind == SKELETON) return "SKELETON";
+  if (kind == GHOST) return "GHOST";
+  if (kind == TRICKSTER) return "TRICKSTER";
+  if (kind == WEREWOLF) return "WEREWOLF";
+  if (kind == HORSEMAN) return "HORSEMAN";
+  return "ZOMBIE";
+}
+
+static const char *monster_effect(uint8_t effects) {
+  if (effects == 5) return "GLUE+POISON";
+  if (effects == 6) return "SLOW+POISON";
+  if (effects & 1) return "GLUE";
+  if (effects & 2) return "SLOW";
+  if (effects & 4) return "POISON";
+  return "-";
+}
+
+static int number_digits(int value) {
+  int digits = 1;
+  while (value >= 10) { value /= 10; digits++; }
+  return digits;
+}
+
+static void draw_monster_hover(void) {
+  const char *name = monster_name(monster_hover_kind);
+  const char *effect = monster_effect(monster_hover_effects);
+  int hp_width = number_digits(monster_hover_hp) + 1 +
+    number_digits(monster_hover_max_hp);
+  int speed_width = number_digits(monster_hover_speed);
+  int width = length(name) + 1 + 2 + hp_width + 1 + 3 + speed_width + 1 +
+    length(effect);
+  int x = SCREEN_W - width * 5 - 3;
+  rect(0, 151, SCREEN_W, 9, 1);
+  text(name, x, 153, 18, 1);
+  x += length(name) * 5 + 5;
+  text("HP", x, 153, 13, 1); x += 10;
+  draw_number(monster_hover_hp, x, 153, 18);
+  x += number_digits(monster_hover_hp) * 5;
+  text("/", x, 153, 13, 1); x += 5;
+  draw_number(monster_hover_max_hp, x, 153, 18);
+  x += number_digits(monster_hover_max_hp) * 5 + 5;
+  text("SPD", x, 153, 13, 1); x += 15;
+  draw_number(monster_hover_speed, x, 153, 18);
+  x += number_digits(monster_hover_speed) * 5 + 5;
+  text(effect, x, 153, 18, 1);
 }
 
 static void draw_message(void) {
@@ -965,17 +1265,31 @@ static void draw_message(void) {
     case 10: s = "CANDY CORN EARNED"; break;
     case 11: s = "DAWN! PATCH SURVIVED"; break;
     case 12: s = "DEFEND THE PUMPKINS"; break;
-    case 13: s = "EVOLUTION SELECTED"; break;
+    case 13:
+      s = hovered && hovered->level == 1 ?
+        "EVOLUTION PREVIEW" : "UPGRADE PREVIEW";
+      break;
     case 14: s = "TOWER EVOLVED"; break;
     case 15: s = "NEED MOON SEEDS"; break;
     default: s = ""; break;
   }
-  if (detail_message && hovered) {
-    const int projected = message_code == 13;
-    int level = projected ? 3 : hovered->level;
-    const char *label = message_code == 13 ? "BRANCH -" :
+  if (mode == NIGHT && monster_hover_timer) {
+    draw_monster_hover();
+  } else if (detail_message && hovered) {
+    int level = hovered->level;
+    int branch = hovered->branch;
+    const char *label = message_code == 13 && level == 1 ? "BRANCH -" :
+      message_code == 13 ? "UPGRADE -" :
       message_code == 14 ? "EVOLVED -" : "UPGRADE -";
-    const char *name = tower_name((uint8_t)hovered->kind, level, hovered->branch);
+    if (message_code == 13 && level == 1) {
+      level = 2;
+      if (branch_preview_active && branch_preview_x == cursor_x &&
+          branch_preview_y == cursor_y)
+        branch = branch_preview;
+    } else if (message_code == 13) {
+      level++;
+    }
+    const char *name = tower_name((uint8_t)hovered->kind, level, branch);
     int name_x = 4 + length(label) * 5 + 2;
     int cost_x = name_x + length(name) * 5 + 7;
     int cost = message_cost;
@@ -986,7 +1300,7 @@ static void draw_message(void) {
     cost_x += 7;
     draw_number(cost, cost_x, 153, 18);
     cost_x += (cost >= 100 ? 3 : 2) * 5 + 5;
-    draw_tower_stats_at((uint8_t)hovered->kind, level, hovered->branch,
+    draw_tower_stats_at((uint8_t)hovered->kind, level, branch,
       cost_x, 153, 18);
   } else if (message_timer && s[0] && (!evolution_message || evolution_active)) {
     rect(0, 151, SCREEN_W, 9, mode == DAY ? 24 : 1);
@@ -1040,9 +1354,9 @@ static void render_world(void) {
     rect(214, 27, 11, 11, 13); rect(211, 31, 12, 4, 13);
     rect(218, 29, 2, 2, 2); rect(221, 34, 2, 2, 2);
     for (i = 0; i < 8; i++) {
-      int sx = (i * 47 + 13) % SCREEN_W;
-      int sy = 27 + ((i * 29 + frame_count / 8) % 118);
-      set_pixel(sx, sy, (i & 1) ? 12 : 13);
+      unsigned sy = night_star_y[i] + night_star_offset;
+      if (sy >= 118) sy -= 118;
+      set_pixel(night_star_x[i], 27 + (int)sy, (i & 1) ? 12 : 13);
     }
   }
 }
@@ -1101,6 +1415,7 @@ static void render(void) {
 int main(void) {
   unsigned i, tick;
   mode = TITLE; day = 1; pumpkins = 8; candy = 150; random_seed = 0x3d71;
+  dawn_note = 5;
   cursor_x = 2; cursor_y = 3;
   back_page = 0;
   wave_clear_clock = 0;
@@ -1112,10 +1427,13 @@ int main(void) {
   for (;;) {
     key_update();
     for (tick = 0; tick < 2; tick++) update_game();
+    update_monster_hover();
     update_camera();
     if (message_timer) message_timer--;
     if (tower_hover_timer) tower_hover_timer--;
+    if (monster_hover_timer) monster_hover_timer--;
     frame_count++;
+    if (mode == NIGHT && ++night_star_offset >= 118) night_star_offset = 0;
     music_update();
     render();
   }
