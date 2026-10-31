@@ -6,7 +6,9 @@ Game Boy Advance PSG audio. The title screen plays a fast, gloomy harmonic
 minor melody; gameplay uses responsive sound effects, including a low noise
 shuffle as the cursor crosses the patch. A separate gloomy harmonic-minor
 score plays during each night at a quicker note rate and stops when dawn
-returns. A brief major-key cue celebrates each surviving wave.
+returns. A brief major-key cue celebrates each surviving wave. PSG routing is
+initialized explicitly, and pulse/noise notes fade through their volume
+envelopes instead of ending at an abrupt full-volume cutoff.
 
 The GBA build uses a warm autumn palette for the build phase and a deep
 purple-green palette at night. Its compact 3×5 pixel lettering has added
@@ -39,6 +41,8 @@ emulators can read them during early initialization.
 - Select (Shift on Webmulator): cycle tower types; over a tower, preview its
   evolution or next upgrade
 - Start (Enter on Webmulator): begin the night or pause/resume the parade
+- Title screen Left/Right: choose difficulty (Normal starts with 15 pumpkins;
+  Hard starts with 10)
 - Select previews only; it never changes tower stats or spends candy
 
 The top build HUD previews the selected tower's purchase cost and

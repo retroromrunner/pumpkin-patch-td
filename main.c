@@ -4,7 +4,9 @@
 #define REG_VCOUNT (*(volatile uint16_t *)0x04000006)
 #define REG_KEYINPUT (*(volatile uint16_t *)0x04000130)
 #define REG_SOUNDCNT_L (*(volatile uint16_t *)0x04000080)
+#define REG_SOUNDCNT_H (*(volatile uint16_t *)0x04000082)
 #define REG_SOUNDCNT_X (*(volatile uint16_t *)0x04000084)
+#define REG_SND1CNT_L (*(volatile uint16_t *)0x04000060)
 #define REG_SND1CNT_H (*(volatile uint16_t *)0x04000062)
 #define REG_SND1CNT_X (*(volatile uint16_t *)0x04000064)
 #define REG_SND2CNT_L (*(volatile uint16_t *)0x04000068)
@@ -92,6 +94,7 @@ static Enemy enemies[MAX_ENEMIES];
 static Projectile projectiles[MAX_PROJECTILES];
 static uint8_t tower_count, enemy_count;
 static uint8_t mode, day, selected;
+static uint8_t hard_mode;
 static uint8_t pumpkins, seeds, spawn_left;
 static uint16_t candy, frame_count, spawn_clock, music_clock, wave_clear_clock;
 static uint16_t old_keys, held_frames, cursor_x, cursor_y;
@@ -231,13 +234,12 @@ static void centered(const char *s, int y, uint8_t color, int scale) {
   text(s, (SCREEN_W - length(s) * 5 * scale + scale) / 2, y, color, scale);
 }
 
-static void play_tone(uint16_t hz, uint8_t duration) {
+static void play_tone(uint16_t hz) {
   uint16_t period;
   if (hz < 40) hz = 40;
   period = (uint16_t)(2048u - 131072u / hz);
-  REG_SND1CNT_H = 0xF0F0;
-  REG_SND1CNT_X = (uint16_t)(0xC000 | period);
-  (void)duration;
+  REG_SND1CNT_H = 0x82C0;
+  REG_SND1CNT_X = (uint16_t)(0x8000 | period);
 }
 
 static void sfx(uint8_t kind) {
@@ -250,34 +252,34 @@ static void sfx(uint8_t kind) {
     else if (kind == 5) noise = 0x15;
     else if (kind == 7) noise = 0x1A;
     else if (kind == 8) noise = 0x14;
-    REG_SND4CNT_L = 0xF53C;
+    REG_SND4CNT_L = 0x8120;
     REG_SND4CNT_H = (uint16_t)(0xC000 | noise);
     return;
   }
   if (kind == 0) {
     uint16_t high = (uint16_t)(2048u - 131072u / 740u);
     uint16_t low = (uint16_t)(2048u - 131072u / 554u);
-    REG_SND1CNT_H = 0xF2F0;
-    REG_SND1CNT_X = (uint16_t)(0xC000 | high);
-    REG_SND2CNT_L = 0xF2E0;
-    REG_SND2CNT_H = (uint16_t)(0xC000 | low);
+    REG_SND1CNT_H = 0xA1C0;
+    REG_SND1CNT_X = (uint16_t)(0x8000 | high);
+    REG_SND2CNT_L = 0xA1C0;
+    REG_SND2CNT_H = (uint16_t)(0x8000 | low);
     return;
   }
   else if (kind == 1) hz = 590;
   else if (kind == 2) {
     uint16_t high = (uint16_t)(2048u - 131072u / 330u);
     uint16_t low = (uint16_t)(2048u - 131072u / 247u);
-    REG_SND1CNT_H = 0xF2F0;
-    REG_SND1CNT_X = (uint16_t)(0xC000 | high);
-    REG_SND2CNT_L = 0xF2E0;
-    REG_SND2CNT_H = (uint16_t)(0xC000 | low);
+    REG_SND1CNT_H = 0xA1C0;
+    REG_SND1CNT_X = (uint16_t)(0x8000 | high);
+    REG_SND2CNT_L = 0xA1C0;
+    REG_SND2CNT_H = (uint16_t)(0x8000 | low);
     return;
   }
   else if (kind == 3) hz = 170;
   else if (kind == 4) hz = 220;
   else if (kind == 5) hz = 660;
   else if (kind == 6) {
-    REG_SND4CNT_L = 0xF53C;
+    REG_SND4CNT_L = 0x8120;
     REG_SND4CNT_H = 0xC017;
     return;
   }
@@ -285,34 +287,34 @@ static void sfx(uint8_t kind) {
   else if (kind == 8) {
     uint16_t high = (uint16_t)(2048u - 131072u / 415u);
     uint16_t low = (uint16_t)(2048u - 131072u / 311u);
-    REG_SND1CNT_H = 0xF2F0;
-    REG_SND1CNT_X = (uint16_t)(0xC000 | high);
-    REG_SND2CNT_L = 0xF2E0;
-    REG_SND2CNT_H = (uint16_t)(0xC000 | low);
+    REG_SND1CNT_H = 0xA1C0;
+    REG_SND1CNT_X = (uint16_t)(0x8000 | high);
+    REG_SND2CNT_L = 0xA1C0;
+    REG_SND2CNT_H = (uint16_t)(0x8000 | low);
     return;
   }
-  REG_SND2CNT_L = 0xF0E0;
-  REG_SND2CNT_H = (uint16_t)(0xC000 | (2048u - 131072u / hz));
+  REG_SND2CNT_L = 0xA1C0;
+  REG_SND2CNT_H = (uint16_t)(0x8000 | (2048u - 131072u / hz));
 }
 
 static void music_update(void) {
   if (mode == NIGHT && paused) return;
   if (dawn_note < 4) {
     if (++dawn_music_clock >= 3) {
-      play_tone(dawn_melody[dawn_note++], 18);
+      play_tone(dawn_melody[dawn_note++]);
       dawn_music_clock = 0;
       if (dawn_note == 4) {
-        REG_SND2CNT_L = 0xF0E0;
-        REG_SND2CNT_H = (uint16_t)(0xC000 | (2048u - 131072u / 659u));
+        REG_SND2CNT_L = 0x92C0;
+        REG_SND2CNT_H = (uint16_t)(0x8000 | (2048u - 131072u / 659u));
       }
     }
     return;
   }
   if (dawn_note == 4) {
     if (++dawn_music_clock >= 6) {
-      REG_SND1CNT_X = 0;
       REG_SND1CNT_H = 0x0080;
       REG_SND2CNT_L = 0x0080;
+      REG_SND1CNT_X = 0;
       REG_SND2CNT_H = 0;
       dawn_note = 5;
       dawn_music_clock = 0;
@@ -324,28 +326,30 @@ static void music_update(void) {
   music_clock = 0;
   if (mode == TITLE) {
     uint16_t hz = melody[title_note++ & 31];
-    play_tone(hz, 18);
+    play_tone(hz);
     if ((title_note & 3) == 0) {
       uint16_t bass = melody[(title_note >> 2) & 31] / 2;
-      REG_SND2CNT_L = 0xF0E0;
-      REG_SND2CNT_H = (uint16_t)(0xC000 | (2048u - 131072u / bass));
+      REG_SND2CNT_L = 0x92C0;
+      REG_SND2CNT_H = (uint16_t)(0x8000 | (2048u - 131072u / bass));
     }
   } else {
     uint8_t index = night_note++ & 31;
-    play_tone(night_melody[index], 18);
+    play_tone(night_melody[index]);
     if ((index & 3) == 0) {
       uint16_t bass = night_bass[(index >> 2) & 7];
-      REG_SND2CNT_L = 0xF0E0;
-      REG_SND2CNT_H = (uint16_t)(0xC000 | (2048u - 131072u / bass));
+      REG_SND2CNT_L = 0x92C0;
+      REG_SND2CNT_H = (uint16_t)(0x8000 | (2048u - 131072u / bass));
     }
   }
 }
 
 static void stop_music(void) {
-  REG_SND1CNT_X = 0;
   REG_SND1CNT_H = 0x0080;
   REG_SND2CNT_L = 0x0080;
+  REG_SND4CNT_L = 0;
+  REG_SND1CNT_X = 0;
   REG_SND2CNT_H = 0;
+  REG_SND4CNT_H = 0;
   music_clock = 0;
   dawn_note = 5;
   dawn_music_clock = 0;
@@ -762,7 +766,8 @@ static void update_camera(void) {
 static void new_game(void) {
   int i;
   stop_music();
-  mode = DAY; day = 1; candy = 150; seeds = 0; pumpkins = 8;
+  mode = DAY; day = 1; candy = 150; seeds = 0;
+  pumpkins = hard_mode ? 10 : 15;
   selected = 0;
   branch_preview_active = 0;
   tower_count = enemy_count = 0; camera_x = camera_y = 0;
@@ -775,6 +780,13 @@ static void new_game(void) {
 static void key_update(void) {
   uint16_t keys = (uint16_t)(~REG_KEYINPUT & 0x03FF);
   uint16_t pressed = keys & (uint16_t)~old_keys;
+  if (mode == TITLE) {
+    if (pressed & (KEY_LEFT | KEY_RIGHT)) hard_mode ^= 1;
+    if (pressed & (KEY_A | KEY_START)) new_game();
+    held_frames = 0;
+    old_keys = keys;
+    return;
+  }
   uint16_t move = keys & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT);
   uint16_t previous_x = cursor_x, previous_y = cursor_y;
   int repeat = 0;
@@ -1097,11 +1109,8 @@ static void draw_hud(void) {
     text(seed_text[0] == '0' ? seed_text + 1 : seed_text, 126, 3, 15, 1);
   }
   draw_pumpkin(156, 11, 0);
-  {
-    char pumpkin_count[2] = {(char)('0' + pumpkins), 0};
-    text("X", 165, 3, 13, 1);
-    text(pumpkin_count, 171, 3, 18, 1);
-  }
+  text("X", 165, 3, 13, 1);
+  draw_number(pumpkins, 171, 3, 18);
   if (mode == DAY) {
     Tower *hovered = tower_at(cursor_x, cursor_y);
     if (hovered) draw_tower_info((uint8_t)hovered->kind, hovered->level,
@@ -1381,8 +1390,10 @@ static void draw_title(void) {
   rect(169, 96, 12, 12, 12); rect(171, 93, 8, 3, 12);
   rect(171, 99, 2, 2, 26); rect(177, 99, 2, 2, 26);
   text("5 NIGHTS  5 TOWERS", 64, 124, 13, 1);
+  centered(hard_mode ? "HARD - 10 PUMPKINS" : "NORMAL - 15 PUMPKINS",
+    132, 18, 1);
   centered("A / START TO BEGIN", 143 + ((frame_count >> 3) & 1), 18, 1);
-  text("CHIPTUNE ON", 81, 154, 12, 1);
+  centered("LEFT/RIGHT: MODE", 154, 12, 1);
 }
 
 static void draw_end(void) {
@@ -1414,7 +1425,8 @@ static void render(void) {
 
 int main(void) {
   unsigned i, tick;
-  mode = TITLE; day = 1; pumpkins = 8; candy = 150; random_seed = 0x3d71;
+  mode = TITLE; day = 1; pumpkins = 15; hard_mode = 0;
+  candy = 150; random_seed = 0x3d71;
   dawn_note = 5;
   cursor_x = 2; cursor_y = 3;
   back_page = 0;
@@ -1423,6 +1435,8 @@ int main(void) {
   for (i = 0; i < sizeof(colors) / sizeof(colors[0]); i++) COLOR_MEM[i] = colors[i];
   REG_SOUNDCNT_X = 0x0080;
   REG_SOUNDCNT_L = 0xFF77;
+  REG_SOUNDCNT_H = 0x0002;
+  REG_SND1CNT_L = 0;
   build_route_map();
   for (;;) {
     key_update();
